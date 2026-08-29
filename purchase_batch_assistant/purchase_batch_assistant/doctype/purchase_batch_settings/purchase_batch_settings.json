@@ -1,0 +1,93 @@
+{
+ "actions": [],
+ "creation": "2026-08-29 03:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "enable_assistant",
+  "trigger_mode",
+  "section_field_mappings",
+  "batch_number_field",
+  "batch_mrp_field",
+  "batch_expiry_field",
+  "column_break_mappings",
+  "minimum_selling_price_field",
+  "serial_number_field"
+ ],
+ "fields": [
+  {
+   "default": "1",
+   "fieldname": "enable_assistant",
+   "fieldtype": "Check",
+   "label": "Enable Purchase Batch & Serial Assistant"
+  },
+  {
+   "default": "Item and Quantity",
+   "fieldname": "trigger_mode",
+   "fieldtype": "Select",
+   "label": "Trigger Mode",
+   "options": "Item and Quantity\nManual Only"
+  },
+  {
+   "fieldname": "section_field_mappings",
+   "fieldtype": "Section Break",
+   "label": "Field Mappings (Leave Blank to Auto-Discover)"
+  },
+  {
+   "description": "Target field in Purchase Invoice Item for Batch Number (e.g. custom_batch_number, batch_no)",
+   "fieldname": "batch_number_field",
+   "fieldtype": "Data",
+   "label": "Batch Number Field"
+  },
+  {
+   "description": "Target field in Purchase Invoice Item for MRP (e.g. custom_mrp, mrp)",
+   "fieldname": "batch_mrp_field",
+   "fieldtype": "Data",
+   "label": "MRP Field"
+  },
+  {
+   "description": "Target field in Purchase Invoice Item for Expiry Date (e.g. custom_expiry_date, expiry_date)",
+   "fieldname": "batch_expiry_field",
+   "fieldtype": "Data",
+   "label": "Expiry Date Field"
+  },
+  {
+   "fieldname": "column_break_mappings",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Target field in Purchase Invoice Item for Minimum Selling Price (e.g. custom_minimum_selling_price, minimum_selling_price)",
+   "fieldname": "minimum_selling_price_field",
+   "fieldtype": "Data",
+   "label": "Minimum Selling Price Field"
+  },
+  {
+   "description": "Target field in Purchase Invoice Item for Serial Number (e.g. serial_no, custom_serial_no)",
+   "fieldname": "serial_number_field",
+   "fieldtype": "Data",
+   "label": "Serial Number Field"
+  }
+ ],
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-08-29 03:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Purchase Batch Assistant",
+ "name": "Purchase Batch Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

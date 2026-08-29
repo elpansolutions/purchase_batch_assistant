@@ -1,0 +1,617 @@
+// Purchase Invoice Batch & Serial Assistant
+// Unified single-page modal for selecting existing batches or entering new ones,
+// with past-date expiry prevention, serial number support, and delayed batch saving.
+
+frappe.ui.form.on('Purchase Invoice', {
+    refresh: function(frm) {
+        // Form level hooks
+    }
+});
+
+frappe.ui.form.on('Purchase Invoice Item', {
+    item_code: function(frm, cdt, cdn) {
+        let row = locals[cdt]?.[cdn];
+        if (!row || !row.item_code) return;
+
+        row.__pba_handled_key = null;
+
+        // Trigger if quantity is already entered
+        if (flt(row.qty) > 0) {
+            setTimeout(() => {
+                trigger_purchase_batch_assistant(frm, cdt, cdn, false);
+            }, 350);
+        }
+    },
+
+    qty: function(frm, cdt, cdn) {
+        let row = locals[cdt]?.[cdn];
+        if (!row || !row.item_code) return;
+
+        if (flt(row.qty) > 0) {
+            setTimeout(() => {
+                trigger_purchase_batch_assistant(frm, cdt, cdn, false);
+            }, 350);
+        }
+    },
+
+    form_render: function(frm, cdt, cdn) {
+        let row = locals[cdt]?.[cdn];
+        if (!row) return;
+
+        if (frm.fields_dict.items && frm.fields_dict.items.grid && frm.fields_dict.items.grid.open_grid_row) {
+            let grid_row = frm.fields_dict.items.grid.open_grid_row;
+            if (grid_row && !grid_row.__pba_btn_added) {
+                grid_row.__pba_btn_added = true;
+                let btn = $(`<button class="btn btn-xs btn-default" style="margin-top: 6px; margin-bottom: 6px;">
+                    <i class="fa fa-barcode text-primary"></i> ${__('Select / Enter Batch & Serial')}
+                </button>`);
+                btn.on('click', function(e) {
+                    e.preventDefault();
+                    trigger_purchase_batch_assistant(frm, cdt, cdn, true);
+                });
+                grid_row.wrapper.find('.grid-row-header').append(btn);
+            }
+        }
+    }
+});
+
+function trigger_purchase_batch_assistant(frm, cdt, cdn, is_manual) {
+    let row = locals[cdt]?.[cdn];
+    if (!row || !row.item_code) return;
+
+    let qty = flt(row.qty);
+    if (qty <= 0) {
+        if (is_manual) {
+            frappe.msgprint(__('Please specify a valid Quantity greater than 0 first.'));
+        }
+        return;
+    }
+
+    // Avoid infinite loop if already open or handled for this item and qty
+    if (window.__pba_active_dialog) return;
+    let handle_key = `${row.item_code}_${qty}`;
+    if (!is_manual && row.__pba_handled_key === handle_key) {
+        return;
+    }
+
+    frappe.call({
+        method: 'purchase_batch_assistant.api.get_item_batch_details',
+        args: {
+            item_code: row.item_code,
+            company: frm.doc.company || null
+        },
+        freeze: false,
+        callback: function(r) {
+            if (!r || !r.message) return;
+            let data = r.message;
+
+            if (data.field_mapping && data.field_mapping.enable_assistant === 0) {
+                return;
+            }
+
+            show_unified_batch_dialog(frm, cdt, cdn, data, is_manual);
+        }
+    });
+}
+
+function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
+    let row = locals[cdt]?.[cdn];
+    if (!row) return;
+
+    window.__pba_active_dialog = true;
+
+    let currency = frm.doc.currency || '₹';
+    let current_qty = flt(row.qty) || 1.0;
+    let item_code = row.item_code;
+    let item_name = data.item?.item_name || item_code;
+    let stock_uom = data.item?.stock_uom || row.uom || 'Nos';
+    let batches = data.batches || [];
+    let field_map = data.field_mapping || {};
+    let system_today = data.current_date || frappe.datetime.get_today();
+
+    // Prefill existing row values if present
+    let initial_batch = row[field_map.batch_field] || row.batch_no || '';
+    let initial_mrp = flt(row[field_map.mrp_field]) || '';
+    let initial_expiry = row[field_map.expiry_field] || '';
+    let initial_min_price = (field_map.min_price_field ? flt(row[field_map.min_price_field]) : '') || data.item?.minimum_selling_price || '';
+    let initial_serials = (field_map.serial_field ? row[field_map.serial_field] : '') || row.serial_no || '';
+
+    let dialog = new frappe.ui.Dialog({
+        title: __('Batch & Serial Assistant — {0}', [item_code]),
+        size: 'large',
+        fields: [
+            {
+                fieldname: 'main_html',
+                fieldtype: 'HTML'
+            }
+        ],
+        primary_action_label: __('Apply to Row'),
+        primary_action: function() {
+            apply_to_row();
+        },
+        secondary_action_label: __('Cancel / Skip (Esc)'),
+        secondary_action: function() {
+            row.__pba_handled_key = `${item_code}_${current_qty}`;
+            dialog.hide();
+        }
+    });
+
+    dialog.$wrapper.addClass('pba-dialog');
+    dialog.on_hide = function() {
+        window.__pba_active_dialog = false;
+    };
+
+    // Helper: convert MM-YY to last day YYYY-MM-DD
+    function mmyy_to_date_str(mmyy) {
+        if (!/^(0[1-9]|1[0-2])-\d{2}$/.test(mmyy)) return null;
+        let parts = mmyy.split('-');
+        let month = parseInt(parts[0], 10);
+        let year = 2000 + parseInt(parts[1], 10);
+        let last_day = new Date(year, month, 0).getDate();
+        let m_str = month < 10 ? '0' + month : month;
+        let d_str = last_day < 10 ? '0' + last_day : last_day;
+        return `${year}-${m_str}-${d_str}`;
+    }
+
+    // Helper: check if date is strictly expired compared to today
+    function is_date_expired(date_str) {
+        if (!date_str) return false;
+        let d = frappe.datetime.str_to_obj(date_str);
+        let today = frappe.datetime.str_to_obj(system_today);
+        return d < today;
+    }
+
+    // Build Unified Single-Page HTML
+    let content_html = `
+        <!-- Header Cards -->
+        <div class="pba-header-cards">
+            <div class="pba-card">
+                <div class="pba-card-label">${__('Item')}</div>
+                <div class="pba-card-val" style="font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${frappe.utils.escape_html(item_name)}">
+                    ${frappe.utils.escape_html(item_name)}
+                </div>
+            </div>
+            <div class="pba-card">
+                <div class="pba-card-label">${__('Invoice Qty')}</div>
+                <div class="pba-card-val text-primary">${current_qty} <span style="font-size: 11px; font-weight: normal; color: #64748b;">${stock_uom}</span></div>
+            </div>
+            <div class="pba-card">
+                <div class="pba-card-label">${__('System Date')}</div>
+                <div class="pba-card-val" style="font-size: 13px; color: #334155;">
+                    ${frappe.datetime.str_to_user(system_today)}
+                </div>
+            </div>
+            ${data.item?.minimum_selling_price ? `
+            <div class="pba-card">
+                <div class="pba-card-label">${__('Item Min Price')}</div>
+                <div class="pba-card-val text-warning">${currency} ${format_currency(data.item.minimum_selling_price, currency)}</div>
+            </div>` : ''}
+        </div>
+    `;
+
+    // Existing Batches Quick-Pick Box (on the same screen!)
+    if (batches.length > 0) {
+        content_html += `
+            <div class="pba-existing-box">
+                <div class="pba-existing-box-header">
+                    <span class="pba-existing-box-title">
+                        <i class="fa fa-list text-primary"></i> ${__('Existing Batches for this Item')} (${batches.length})
+                    </span>
+                    <input type="text" id="pba_search_existing" placeholder="${__('Search batch #, MRP, expiry...')}" style="font-size: 11px; padding: 2px 8px; border: 1px solid #cbd5e1; border-radius: 4px; width: 220px;">
+                </div>
+                <div class="pba-table-container">
+                    <table class="pba-table" id="pba_table_existing">
+                        <thead>
+                            <tr>
+                                <th>${__('Batch Number')}</th>
+                                <th>${__('MRP')}</th>
+                                <th>${__('Expiry (MM-YY)')}</th>
+                                <th>${__('Available Stock')}</th>
+                                <th>${__('Status')}</th>
+                                <th style="text-align: right;">${__('Action')}</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+        `;
+
+        batches.forEach((b, idx) => {
+            let mrp_str = b.mrp > 0 ? `${currency} ${format_currency(b.mrp, currency)}` : '—';
+            let exp_badge = b.expiry_mm_yy ? `<span class="pba-badge ${b.is_expired ? 'pba-badge-red' : 'pba-badge-green'}">${b.expiry_mm_yy}</span>` : '—';
+            let status_badge = b.is_expired ? `<span class="pba-badge pba-badge-red">${__('Expired')}</span>` : `<span class="pba-badge pba-badge-green">${__('Active')}</span>`;
+            let stock_str = `${b.batch_qty} ${stock_uom}`;
+
+            content_html += `
+                <tr class="pba-batch-row ${b.is_expired ? 'pba-row-expired' : ''}" data-index="${idx}">
+                    <td><strong>${frappe.utils.escape_html(b.batch_id)}</strong></td>
+                    <td style="color: #15803d; font-weight: 600;">${mrp_str}</td>
+                    <td>${exp_badge} ${b.expiry_formatted ? `<small style="color:#64748b;">(${b.expiry_formatted})</small>` : ''}</td>
+                    <td>${stock_str}</td>
+                    <td>${status_badge}</td>
+                    <td style="text-align: right;">
+                        <button type="button" class="pba-btn-pick ${b.is_expired ? 'pba-btn-pick-disabled' : ''}" data-index="${idx}">
+                            ${b.is_expired ? `<i class="fa fa-ban"></i> ${__('Expired')}` : `<i class="fa fa-arrow-down"></i> ${__('Use This')}`}
+                        </button>
+                    </td>
+                </tr>
+            `;
+        });
+
+        content_html += `
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        `;
+    }
+
+    // Direct Input Form (Same Screen!)
+    content_html += `
+        <div class="pba-form-box">
+            <div class="pba-form-box-title">
+                <span><i class="fa fa-edit text-primary"></i> ${__('Batch Details to Populate')}</span>
+                <span style="font-size: 11px; font-weight: normal; color: #64748b; text-transform: none;">
+                    ${__('Select an existing batch above or type new details directly')}
+                </span>
+            </div>
+            <div class="row">
+                <div class="col-sm-6">
+                    <div class="form-group">
+                        <label class="control-label" style="font-weight: 600;">${__('Batch Number')} <span class="text-danger">*</span></label>
+                        <input type="text" id="pba_input_batch_id" class="form-control input-sm" value="${frappe.utils.escape_html(initial_batch)}" placeholder="${__('e.g. B-2026-001')}">
+                    </div>
+                </div>
+                <div class="col-sm-6">
+                    <div class="form-group">
+                        <label class="control-label" style="font-weight: 600;">${__('Batch MRP ({0})', [currency])} <span class="text-danger">*</span></label>
+                        <input type="number" step="0.01" id="pba_input_mrp" class="form-control input-sm" value="${initial_mrp}" placeholder="${__('Maximum Retail Price')}">
+                    </div>
+                </div>
+            </div>
+            <div class="row" style="margin-top: 6px;">
+                <div class="col-sm-6">
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label class="control-label" style="font-weight: 600;">${__('Expiry Date (MM-YY)')} <span class="text-danger">*</span></label>
+                        <div style="display: flex; gap: 8px;">
+                            <input type="text" id="pba_input_expiry_mmyy" class="form-control input-sm" value="${frappe.utils.escape_html(initial_expiry)}" placeholder="MM-YY (e.g. 08-27)" maxlength="5" style="max-width: 140px;">
+                            <input type="date" id="pba_input_expiry_date" class="form-control input-sm">
+                        </div>
+                        <div id="pba_expiry_feedback" style="font-size: 11px; margin-top: 3px; color: #64748b;">
+                            ${__('Must not be an expired date in the past')}
+                        </div>
+                    </div>
+                </div>
+                <div class="col-sm-6">
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label class="control-label" style="font-weight: 600;">${__('Minimum Selling Price ({0})', [currency])}</label>
+                        <input type="number" step="0.01" id="pba_input_min_price" class="form-control input-sm" value="${initial_min_price}" placeholder="${__('Optional floor price')}">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Serial Number Section (Always Accessible on Same Screen) -->
+        <div class="pba-serial-box">
+            <div class="pba-serial-header">
+                <div class="pba-serial-title">
+                    <i class="fa fa-barcode text-primary"></i> ${__('Serial Numbers')} (Quantity: ${current_qty})
+                </div>
+                <span id="pba_serial_badge" class="pba-counter pba-counter-warn">0 / ${current_qty} ${__('entered')}</span>
+            </div>
+    `;
+
+    if (current_qty === 1) {
+        content_html += `
+            <div class="form-group" style="margin-bottom: 0;">
+                <input type="text" id="pba_input_serial" class="form-control input-sm" value="${frappe.utils.escape_html(initial_serials.trim())}" placeholder="${__('Enter or scan single serial number (optional if not serial tracked)')}">
+            </div>
+        `;
+    } else {
+        content_html += `
+            <div class="pba-generator-box">
+                <span style="font-size: 11px; font-weight: 600; color: #475569;">${__('Quick Generator:')}</span>
+                <input type="text" id="pba_gen_prefix" placeholder="${__('Prefix (e.g. SN-')}" style="width: 110px; border: 1px solid #cbd5e1; border-radius: 4px;">
+                <input type="number" id="pba_gen_start" placeholder="${__('Start # (e.g. 1001)')}" style="width: 120px; border: 1px solid #cbd5e1; border-radius: 4px;">
+                <button type="button" class="btn btn-xs btn-default" id="pba_btn_gen">
+                    <i class="fa fa-magic"></i> ${__('Generate {0} Serials', [current_qty])}
+                </button>
+            </div>
+            <div class="form-group" style="margin-bottom: 0;">
+                <textarea id="pba_input_serial" class="form-control" rows="3" placeholder="${__('Enter 1 serial number per line or comma-separated')}">${frappe.utils.escape_html(initial_serials)}</textarea>
+            </div>
+        `;
+    }
+
+    content_html += `</div>`;
+
+    dialog.fields_dict.main_html.$wrapper.html(content_html);
+
+    // Form inputs references
+    let $batch_input = dialog.$wrapper.find('#pba_input_batch_id');
+    let $mrp_input = dialog.$wrapper.find('#pba_input_mrp');
+    let $mmyy_input = dialog.$wrapper.find('#pba_input_expiry_mmyy');
+    let $date_input = dialog.$wrapper.find('#pba_input_expiry_date');
+    let $min_input = dialog.$wrapper.find('#pba_input_min_price');
+    let $expiry_feedback = dialog.$wrapper.find('#pba_expiry_feedback');
+    let $serial_input = dialog.$wrapper.find('#pba_input_serial');
+    let $serial_badge = dialog.$wrapper.find('#pba_serial_badge');
+
+    // Handle initial expiry date picker sync
+    if (initial_expiry) {
+        let converted = mmyy_to_date_str(initial_expiry);
+        if (converted) {
+            $date_input.val(converted);
+        } else if (/^\d{4}-\d{2}-\d{2}$/.test(initial_expiry)) {
+            $date_input.val(initial_expiry);
+            let d = new Date(initial_expiry);
+            let m = d.getMonth() + 1;
+            let y = d.getFullYear().toString().slice(-2);
+            $mmyy_input.val(`${m < 10 ? '0' + m : m}-${y}`);
+        }
+    }
+
+    // Expiry validation function: ensures NOT expired in the past
+    function validate_expiry_inputs() {
+        let mmyy = $mmyy_input.val().trim();
+        if (!mmyy) {
+            $expiry_feedback.html(`<span style="color: #64748b;">${__('Enter in MM-YY format or select from date picker')}</span>`);
+            return true;
+        }
+
+        if (!/^(0[1-9]|1[0-2])-\d{2}$/.test(mmyy)) {
+            $expiry_feedback.html(`<span class="text-danger"><i class="fa fa-times"></i> ${__('Must be in MM-YY format (e.g. 08-27)')}</span>`);
+            return false;
+        }
+
+        let date_str = mmyy_to_date_str(mmyy);
+        if (date_str && is_date_expired(date_str)) {
+            $expiry_feedback.html(`<span class="text-danger" style="font-weight: 600;"><i class="fa fa-warning"></i> ${__('Expiry Date is in the past ({0}). Expired products cannot be accepted.', [date_str])}</span>`);
+            return false;
+        }
+
+        $expiry_feedback.html(`<span class="text-success"><i class="fa fa-check"></i> ${__('Valid Future Expiry: {0}', [date_str])}</span>`);
+        return true;
+    }
+
+    // Bidirectional sync between MM-YY and Date Picker
+    $mmyy_input.on('input', function() {
+        let val = $(this).val().trim();
+        if (/^(0[1-9]|1[0-2])-\d{2}$/.test(val)) {
+            let date_str = mmyy_to_date_str(val);
+            if (date_str) {
+                $date_input.val(date_str);
+            }
+        }
+        validate_expiry_inputs();
+    });
+
+    $date_input.on('change', function() {
+        let val = $(this).val();
+        if (val) {
+            let d = new Date(val);
+            let m = d.getMonth() + 1;
+            let y = d.getFullYear().toString().slice(-2);
+            $mmyy_input.val(`${m < 10 ? '0' + m : m}-${y}`);
+        }
+        validate_expiry_inputs();
+    });
+
+    // Existing batches search
+    dialog.$wrapper.find('#pba_search_existing').on('input', function() {
+        let term = $(this).val().toLowerCase();
+        dialog.$wrapper.find('#pba_table_existing tbody tr.pba-batch-row').each(function() {
+            let text = $(this).text().toLowerCase();
+            $(this).toggle(text.indexOf(term) > -1);
+        });
+    });
+
+    // Select existing batch row click handler (fills inputs instantly on same page)
+    dialog.$wrapper.find('#pba_table_existing .pba-batch-row').on('click', function(e) {
+        let idx = cint($(this).attr('data-index'));
+        let b = batches[idx];
+        if (!b) return;
+
+        if (b.is_expired) {
+            frappe.show_alert({
+                message: __('Batch <b>{0}</b> is expired ({1}) and cannot be selected for purchase.', [b.batch_id, b.expiry_formatted || b.expiry_date]),
+                indicator: 'red'
+            }, 4);
+            return;
+        }
+
+        dialog.$wrapper.find('#pba_table_existing tbody tr').removeClass('selected-row');
+        $(this).addClass('selected-row');
+        dialog.$wrapper.find('#pba_table_existing .pba-btn-pick').not('.pba-btn-pick-disabled').removeClass('is-selected').html(`<i class="fa fa-arrow-down"></i> ${__('Use This')}`);
+        $(this).find('.pba-btn-pick').addClass('is-selected').html(`<i class="fa fa-check"></i> ${__('Selected')}`);
+
+        // Populate fields in direct form on the same page
+        $batch_input.val(b.batch_id);
+        if (b.mrp > 0) $mrp_input.val(b.mrp);
+        if (b.expiry_mm_yy) {
+            $mmyy_input.val(b.expiry_mm_yy);
+            let date_str = mmyy_to_date_str(b.expiry_mm_yy);
+            if (date_str) $date_input.val(date_str);
+        } else if (b.expiry_date) {
+            $date_input.val(b.expiry_date);
+        }
+        if (b.minimum_selling_price > 0) $min_input.val(b.minimum_selling_price);
+
+        validate_expiry_inputs();
+
+        frappe.show_alert({
+            message: __('Populated Batch <b>{0}</b> details into form below', [b.batch_id]),
+            indicator: 'blue'
+        }, 2);
+    });
+
+    // Serial counter logic
+    function update_serial_count() {
+        let raw = $serial_input.val().trim();
+        let count = 0;
+        if (raw) {
+            if (current_qty === 1) {
+                count = 1;
+            } else {
+                let lines = raw.replace(/,/g, '\n').split('\n').map(s => s.trim()).filter(Boolean);
+                count = lines.length;
+            }
+        }
+        $serial_badge.text(`${count} / ${current_qty} ${__('entered')}`);
+        if (count === current_qty) {
+            $serial_badge.removeClass('pba-counter-warn').addClass('pba-counter-ok');
+        } else {
+            $serial_badge.removeClass('pba-counter-ok').addClass('pba-counter-warn');
+        }
+    }
+
+    $serial_input.on('input', update_serial_count);
+    update_serial_count();
+
+    // Auto generator handler
+    dialog.$wrapper.find('#pba_btn_gen').on('click', function() {
+        let prefix = dialog.$wrapper.find('#pba_gen_prefix').val().trim();
+        let start_num = cint(dialog.$wrapper.find('#pba_gen_start').val());
+        if (start_num <= 0) start_num = 1;
+
+        let items = [];
+        for (let i = 0; i < current_qty; i++) {
+            items.push(`${prefix}${start_num + i}`);
+        }
+        $serial_input.val(items.join('\n'));
+        update_serial_count();
+    });
+
+    // Apply to Row (NO premature DB insertion! Batch is saved only when invoice is submitted)
+    function apply_to_row() {
+        let batch_id = $batch_input.val().trim();
+        let mrp = flt($mrp_input.val());
+        let mmyy = $mmyy_input.val().trim();
+        let exp_date = $date_input.val();
+        let min_price = flt($min_input.val());
+
+        if (!batch_id) {
+            frappe.msgprint(__('Batch Number is required.'));
+            $batch_input.focus();
+            return;
+        }
+
+        if (mrp <= 0) {
+            frappe.msgprint(__('Batch MRP must be greater than 0.'));
+            $mrp_input.focus();
+            return;
+        }
+
+        // Strict Expiry Validation: Cannot be empty, invalid, or expired in the past
+        if (!mmyy) {
+            frappe.msgprint(__('Expiry Date is required in MM-YY format (e.g. 08-27).'));
+            $mmyy_input.focus();
+            return;
+        }
+
+        if (!/^(0[1-9]|1[0-2])-\d{2}$/.test(mmyy)) {
+            frappe.msgprint(__('Expiry Date must be in valid MM-YY format (Example: 08-27).'));
+            $mmyy_input.focus();
+            return;
+        }
+
+        let calculated_date = mmyy_to_date_str(mmyy);
+        if (is_date_expired(calculated_date)) {
+            frappe.msgprint({
+                title: __('Expired Date Not Allowed'),
+                indicator: 'red',
+                message: __('The Expiry Date ({0}) is already expired or in the past.<br><strong>Purchases cannot accept expired products.</strong> Please enter a future expiry date.', [mmyy])
+            });
+            $mmyy_input.focus();
+            return;
+        }
+
+        // Serial Number Handling
+        let raw_serials = $serial_input.val().trim();
+        let serials_formatted = '';
+        if (raw_serials) {
+            let lines = raw_serials.replace(/,/g, '\n').split('\n').map(s => s.trim()).filter(Boolean);
+            if (data.has_serial_tracking && lines.length !== current_qty) {
+                frappe.msgprint(__('Entered {0} serial numbers, but row quantity is {1}. Please match the quantity.', [lines.length, current_qty]));
+                return;
+            }
+            serials_formatted = lines.join('\n');
+        } else if (data.has_serial_tracking) {
+            frappe.msgprint(__('Serial Numbers are required for this item (Quantity: {0}).', [current_qty]));
+            $serial_input.focus();
+            return;
+        }
+
+        // Write directly to Purchase Invoice Item row fields
+        let batch_field = field_map.batch_field || 'batch_no';
+        let mrp_field = field_map.mrp_field;
+        let expiry_field = field_map.expiry_field;
+        let expiry_type = field_map.expiry_fieldtype || 'Data';
+        let min_field = field_map.min_price_field;
+        let serial_field = field_map.serial_field || 'serial_no';
+
+        // 1. Batch Number
+        if (batch_field && frappe.meta.has_field(cdt, batch_field)) {
+            frappe.model.set_value(cdt, cdn, batch_field, batch_id);
+        }
+        
+        // Only set standard batch_no if this batch actually exists in system,
+        // or if batch_field is the primary batch_no field.
+        // For new batches with custom_batch_number, leave batch_no to be created on invoice submit.
+        let is_existing_batch = batches.some(b => b.batch_id === batch_id || b.name === batch_id);
+        if (is_existing_batch) {
+            let matched = batches.find(b => b.batch_id === batch_id || b.name === batch_id);
+            if (frappe.meta.has_field(cdt, 'batch_no')) {
+                frappe.model.set_value(cdt, cdn, 'batch_no', matched.name || batch_id);
+            }
+        } else if (batch_field === 'batch_no') {
+            frappe.model.set_value(cdt, cdn, 'batch_no', batch_id);
+        }
+
+        // 2. MRP
+        if (mrp_field && frappe.meta.has_field(cdt, mrp_field)) {
+            frappe.model.set_value(cdt, cdn, mrp_field, mrp);
+        }
+
+        // 3. Expiry Date (MM-YY if Data field, or YYYY-MM-DD if Date field)
+        if (expiry_field && frappe.meta.has_field(cdt, expiry_field)) {
+            let val_to_set = (expiry_type === 'Date') ? (exp_date || calculated_date) : mmyy;
+            frappe.model.set_value(cdt, cdn, expiry_field, val_to_set);
+        }
+
+        // 4. Minimum Selling Price
+        if (min_field && frappe.meta.has_field(cdt, min_field) && min_price > 0) {
+            frappe.model.set_value(cdt, cdn, min_field, min_price);
+        }
+
+        // 5. Serial Numbers
+        if (serials_formatted) {
+            if (serial_field && frappe.meta.has_field(cdt, serial_field)) {
+                frappe.model.set_value(cdt, cdn, serial_field, serials_formatted);
+            }
+            if (serial_field !== 'serial_no' && frappe.meta.has_field(cdt, 'serial_no')) {
+                frappe.model.set_value(cdt, cdn, 'serial_no', serials_formatted);
+            }
+        }
+
+        // ERPNext v16 inline serial/batch flag
+        if (frappe.meta.has_field(cdt, 'use_serial_batch_fields')) {
+            frappe.model.set_value(cdt, cdn, 'use_serial_batch_fields', 1);
+        }
+
+        // Refresh grid UI so user sees updated values immediately
+        if (frm && frm.refresh_field) {
+            frm.refresh_field('items');
+        }
+
+        // Mark row handled for this item and qty
+        row.__pba_handled_key = `${item_code}_${current_qty}`;
+
+        frappe.show_alert({
+            message: __('Row {0}: Applied Batch <b>{1}</b> (MRP: {2}{3}, Exp: {4})', [row.idx || 1, batch_id, currency, mrp, mmyy]),
+            indicator: 'green'
+        }, 3);
+
+        dialog.hide();
+    }
+
+    dialog.show();
+}

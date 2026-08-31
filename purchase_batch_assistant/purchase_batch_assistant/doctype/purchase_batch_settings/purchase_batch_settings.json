@@ -8,6 +8,7 @@
   "trigger_mode",
   "section_field_mappings",
   "batch_number_field",
+  "rate_field",
   "batch_mrp_field",
   "batch_expiry_field",
   "column_break_mappings",
@@ -38,6 +39,12 @@
    "fieldname": "batch_number_field",
    "fieldtype": "Data",
    "label": "Batch Number Field"
+  },
+  {
+   "description": "Target field in Purchase Invoice Item for Billing / Purchase Rate (e.g. rate)",
+   "fieldname": "rate_field",
+   "fieldtype": "Data",
+   "label": "Billing / Purchase Rate Field"
   },
   {
    "description": "Target field in Purchase Invoice Item for MRP (e.g. custom_mrp, mrp)",

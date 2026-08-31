@@ -18,29 +18,35 @@ It prevents data entry mismatches, blocks expired stock, manages serial numbers,
 - For new batches, users can directly enter the details in the form on the same page.
 
 ### 2. Zero-Discrepancy Existing Batch Selection
-- Displays all active batches for the selected item with Batch Number, MRP, Expiry Date (`MM-YY` badge + readable date), and Current Stock.
-- Modern **"Use This"** action button highlights selected rows and populates custom fields (`custom_batch_number`, `custom_mrp`, `custom_expiry_date`, etc.).
+- Displays all active batches for the selected item with Batch Number, Last Purchase Rate, MRP, Expiry Date (`MM-YY` badge + readable date), and Current Stock.
+- Modern **"Use This"** action button highlights selected rows and populates custom fields (`custom_batch_number`, `rate`, `custom_mrp`, `custom_expiry_date`, etc.).
 - Pre-populating verified batch details ensures strict compliance with server scripts that reject mismatched MRP or Expiry.
 
-### 3. Strict Past-Date Expiry Validation
+### 3. All-in-One Billing Rate & Calculations
+- Enter the **Billing / Purchase Rate** directly inside the popup without needing to close the modal or navigate across the table.
+- Automatically pre-fills from the existing row rate, item price list, or the latest purchase rate.
+- Seamlessly triggers standard ERPNext line-item amount and tax recalculations upon applying.
+
+### 4. Strict Past-Date Expiry Validation
 - Validates the entered `MM-YY` string (e.g. `08-27`).
 - Automatically computes the last day of the expiration month and compares against the system date.
 - **Blocks Expired Stock**: If the expiry date is in the past (e.g., `01-24`), the form alerts the user and prevents submission.
 - Expired batches in the existing list are marked with a disabled **"Expired"** badge to prevent purchasing expired inventory.
 - Features bidirectional synchronization between the `MM-YY` text field and the visual date picker.
 
-### 4. Delayed Batch Creation (Saved Only on Invoice Submission)
+### 5. Delayed Batch Creation (Saved Only on Invoice Submission)
 - The modal **does not prematurely create batch documents** in `tabBatch` while drafting rows.
 - It populates the Purchase Invoice Item row fields, allowing standard ERPNext batch creation or your custom server scripts to insert the batch record only when the invoice is validated and submitted.
 
-### 5. Smart Serial Number Handling
+### 6. Smart Serial Number Handling
 - **Quantity = 1**: Displays a clean single-line serial number input field.
 - **Quantity > 1**: Displays a multi-line textarea with a live counter (`N / Qty entered`) showing green when exact count matches.
 - **Auto-Generator Tool**: Allows generating sequential serials in seconds by specifying a prefix (`SN-`) and start number (`1001`).
 
-### 6. Multi-Environment Resilience (Dev vs. Prod)
+### 7. Multi-Environment Resilience (Dev vs. Prod)
 - Automatically detects custom or standard field names in both `Purchase Invoice Item` and `Batch`:
   - **Batch**: `custom_batch_number` &rarr; falls back to `batch_no`
+  - **Rate**: `rate` &rarr; configurable via `rate_field`
   - **MRP**: `custom_mrp` &rarr; `custom_custom_mrp` &rarr; `mrp`
   - **Expiry**: `custom_expiry_date` (Data/`MM-YY`) &rarr; `expiry_date` (Date)
   - **Min Selling Price**: `custom_minimum_selling_price` &rarr; `minimum_selling_price`

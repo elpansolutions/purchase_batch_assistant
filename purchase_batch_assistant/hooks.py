@@ -12,3 +12,12 @@ doctype_js = {
 }
 
 app_include_css = "/assets/purchase_batch_assistant/css/purchase_invoice_batch.css"
+
+# Document Events
+# ---------------
+doc_events = {
+    "Purchase Invoice": {
+        "validate": "purchase_batch_assistant.api.validate_purchase_invoice"
+    }
+}
+

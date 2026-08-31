@@ -288,3 +288,9 @@
     font-size: 11px;
     padding: 3px 6px;
 }
+
+.pba-input-error {
+    border-color: #ef4444 !important;
+    background-color: #fef2f2 !important;
+}
+

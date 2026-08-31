@@ -5,6 +5,21 @@
 frappe.ui.form.on('Purchase Invoice', {
     refresh: function(frm) {
         // Form level hooks
+    },
+    validate: function(frm) {
+        for (let row of (frm.doc.items || [])) {
+            if (!row.item_code) continue;
+            let rate = flt(row.rate);
+            let mrp = flt(row.custom_mrp || row.mrp);
+            if (rate > 0 && mrp > 0 && rate >= mrp) {
+                frappe.validated = false;
+                frappe.throw({
+                    title: __('Rate Exceeds or Equals MRP'),
+                    message: __('Row #{0} ({1}): Billing / Purchase Rate (<b>{2}</b>) must be strictly less than Batch MRP (<b>{3}</b>). Rate cannot be equal to or greater than MRP.', [row.idx || '', row.item_code, rate, mrp])
+                });
+                return false;
+            }
+        }
     }
 });
 
@@ -111,6 +126,7 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
 
     // Prefill existing row values if present
     let initial_batch = row[field_map.batch_field] || row.batch_no || '';
+    let initial_rate = (field_map.rate_field && flt(row[field_map.rate_field])) || flt(row.rate) || flt(row.price_list_rate) || flt(data.item?.last_purchase_rate) || flt(data.item?.standard_rate) || '';
     let initial_mrp = flt(row[field_map.mrp_field]) || '';
     let initial_expiry = row[field_map.expiry_field] || '';
     let initial_min_price = (field_map.min_price_field ? flt(row[field_map.min_price_field]) : '') || data.item?.minimum_selling_price || '';
@@ -181,10 +197,15 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
                     ${frappe.datetime.str_to_user(system_today)}
                 </div>
             </div>
+            ${(flt(data.item?.last_purchase_rate) > 0) ? `
+            <div class="pba-card">
+                <div class="pba-card-label">${__('Last Purchase Rate')}</div>
+                <div class="pba-card-val text-primary" style="font-size: 14px;">${currency} ${format_currency(data.item.last_purchase_rate, currency)}</div>
+            </div>` : ''}
             ${data.item?.minimum_selling_price ? `
             <div class="pba-card">
                 <div class="pba-card-label">${__('Item Min Price')}</div>
-                <div class="pba-card-val text-warning">${currency} ${format_currency(data.item.minimum_selling_price, currency)}</div>
+                <div class="pba-card-val text-warning" style="font-size: 14px;">${currency} ${format_currency(data.item.minimum_selling_price, currency)}</div>
             </div>` : ''}
         </div>
     `;
@@ -197,13 +218,14 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
                     <span class="pba-existing-box-title">
                         <i class="fa fa-list text-primary"></i> ${__('Existing Batches for this Item')} (${batches.length})
                     </span>
-                    <input type="text" id="pba_search_existing" placeholder="${__('Search batch #, MRP, expiry...')}" style="font-size: 11px; padding: 2px 8px; border: 1px solid #cbd5e1; border-radius: 4px; width: 220px;">
+                    <input type="text" id="pba_search_existing" placeholder="${__('Search batch #, rate, MRP, expiry...')}" style="font-size: 11px; padding: 2px 8px; border: 1px solid #cbd5e1; border-radius: 4px; width: 220px;">
                 </div>
                 <div class="pba-table-container">
                     <table class="pba-table" id="pba_table_existing">
                         <thead>
                             <tr>
                                 <th>${__('Batch Number')}</th>
+                                <th>${__('Last Rate')}</th>
                                 <th>${__('MRP')}</th>
                                 <th>${__('Expiry (MM-YY)')}</th>
                                 <th>${__('Available Stock')}</th>
@@ -215,6 +237,7 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
         `;
 
         batches.forEach((b, idx) => {
+            let rate_str = b.last_purchase_rate > 0 ? `${currency} ${format_currency(b.last_purchase_rate, currency)}` : '—';
             let mrp_str = b.mrp > 0 ? `${currency} ${format_currency(b.mrp, currency)}` : '—';
             let exp_badge = b.expiry_mm_yy ? `<span class="pba-badge ${b.is_expired ? 'pba-badge-red' : 'pba-badge-green'}">${b.expiry_mm_yy}</span>` : '—';
             let status_badge = b.is_expired ? `<span class="pba-badge pba-badge-red">${__('Expired')}</span>` : `<span class="pba-badge pba-badge-green">${__('Active')}</span>`;
@@ -223,6 +246,7 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
             content_html += `
                 <tr class="pba-batch-row ${b.is_expired ? 'pba-row-expired' : ''}" data-index="${idx}">
                     <td><strong>${frappe.utils.escape_html(b.batch_id)}</strong></td>
+                    <td style="color: #0284c7; font-weight: 600;">${rate_str}</td>
                     <td style="color: #15803d; font-weight: 600;">${mrp_str}</td>
                     <td>${exp_badge} ${b.expiry_formatted ? `<small style="color:#64748b;">(${b.expiry_formatted})</small>` : ''}</td>
                     <td>${stock_str}</td>
@@ -248,7 +272,7 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
     content_html += `
         <div class="pba-form-box">
             <div class="pba-form-box-title">
-                <span><i class="fa fa-edit text-primary"></i> ${__('Batch Details to Populate')}</span>
+                <span><i class="fa fa-edit text-primary"></i> ${__('Batch & Rate Details to Populate')}</span>
                 <span style="font-size: 11px; font-weight: normal; color: #64748b; text-transform: none;">
                     ${__('Select an existing batch above or type new details directly')}
                 </span>
@@ -262,14 +286,6 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
                 </div>
                 <div class="col-sm-6">
                     <div class="form-group">
-                        <label class="control-label" style="font-weight: 600;">${__('Batch MRP ({0})', [currency])} <span class="text-danger">*</span></label>
-                        <input type="number" step="0.01" id="pba_input_mrp" class="form-control input-sm" value="${initial_mrp}" placeholder="${__('Maximum Retail Price')}">
-                    </div>
-                </div>
-            </div>
-            <div class="row" style="margin-top: 6px;">
-                <div class="col-sm-6">
-                    <div class="form-group" style="margin-bottom: 0;">
                         <label class="control-label" style="font-weight: 600;">${__('Expiry Date (MM-YY)')} <span class="text-danger">*</span></label>
                         <div style="display: flex; gap: 8px;">
                             <input type="text" id="pba_input_expiry_mmyy" class="form-control input-sm" value="${frappe.utils.escape_html(initial_expiry)}" placeholder="MM-YY (e.g. 08-27)" maxlength="5" style="max-width: 140px;">
@@ -280,13 +296,28 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
                         </div>
                     </div>
                 </div>
-                <div class="col-sm-6">
+            </div>
+            <div class="row" style="margin-top: 6px;">
+                <div class="col-sm-4">
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label class="control-label" style="font-weight: 600;">${__('Billing / Purchase Rate ({0})', [currency])} <span class="text-danger">*</span></label>
+                        <input type="number" step="0.01" id="pba_input_rate" class="form-control input-sm" value="${initial_rate}" placeholder="${__('Rate billed to us')}">
+                    </div>
+                </div>
+                <div class="col-sm-4">
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label class="control-label" style="font-weight: 600;">${__('Batch MRP ({0})', [currency])} <span class="text-danger">*</span></label>
+                        <input type="number" step="0.01" id="pba_input_mrp" class="form-control input-sm" value="${initial_mrp}" placeholder="${__('Maximum Retail Price')}">
+                    </div>
+                </div>
+                <div class="col-sm-4">
                     <div class="form-group" style="margin-bottom: 0;">
                         <label class="control-label" style="font-weight: 600;">${__('Minimum Selling Price ({0})', [currency])}</label>
                         <input type="number" step="0.01" id="pba_input_min_price" class="form-control input-sm" value="${initial_min_price}" placeholder="${__('Optional floor price')}">
                     </div>
                 </div>
             </div>
+            <div id="pba_rate_mrp_feedback" style="font-size: 11px; margin-top: 6px; display: none;"></div>
         </div>
 
         <!-- Serial Number Section (Always Accessible on Same Screen) -->
@@ -327,6 +358,7 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
 
     // Form inputs references
     let $batch_input = dialog.$wrapper.find('#pba_input_batch_id');
+    let $rate_input = dialog.$wrapper.find('#pba_input_rate');
     let $mrp_input = dialog.$wrapper.find('#pba_input_mrp');
     let $mmyy_input = dialog.$wrapper.find('#pba_input_expiry_mmyy');
     let $date_input = dialog.$wrapper.find('#pba_input_expiry_date');
@@ -371,6 +403,38 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
         $expiry_feedback.html(`<span class="text-success"><i class="fa fa-check"></i> ${__('Valid Future Expiry: {0}', [date_str])}</span>`);
         return true;
     }
+
+    // Rate vs MRP validation: Rate must strictly be less than MRP (< MRP, not >=)
+    function validate_rate_vs_mrp() {
+        let r = flt($rate_input.val());
+        let m = flt($mrp_input.val());
+        let $feedback = dialog.$wrapper.find('#pba_rate_mrp_feedback');
+
+        if ($rate_input.val().trim() !== '' && $mrp_input.val().trim() !== '') {
+            if (m > 0 && r >= m) {
+                $feedback.show().html(`<span class="text-danger" style="font-weight: 600;"><i class="fa fa-warning"></i> ${__('Billing Rate ({0} {1}) must be strictly less than Batch MRP ({0} {2}). Equal or higher rate is not allowed.', [currency, format_currency(r, currency), format_currency(m, currency)])}</span>`);
+                $rate_input.addClass('pba-input-error');
+                $mrp_input.addClass('pba-input-error');
+                return false;
+            } else if (m > 0 && r > 0) {
+                let margin_pct = (((m - r) / m) * 100).toFixed(1);
+                $feedback.show().html(`<span class="text-success"><i class="fa fa-check"></i> ${__('Valid Rate: Margin is {0}% below MRP.', [margin_pct])}</span>`);
+                $rate_input.removeClass('pba-input-error');
+                $mrp_input.removeClass('pba-input-error');
+                return true;
+            }
+        }
+        $feedback.hide();
+        $rate_input.removeClass('pba-input-error');
+        $mrp_input.removeClass('pba-input-error');
+        return true;
+    }
+
+    $rate_input.on('input', validate_rate_vs_mrp);
+    $mrp_input.on('input', validate_rate_vs_mrp);
+
+    // Initial check
+    validate_rate_vs_mrp();
 
     // Bidirectional sync between MM-YY and Date Picker
     $mmyy_input.on('input', function() {
@@ -425,6 +489,7 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
 
         // Populate fields in direct form on the same page
         $batch_input.val(b.batch_id);
+        if (b.last_purchase_rate > 0) $rate_input.val(b.last_purchase_rate);
         if (b.mrp > 0) $mrp_input.val(b.mrp);
         if (b.expiry_mm_yy) {
             $mmyy_input.val(b.expiry_mm_yy);
@@ -436,6 +501,7 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
         if (b.minimum_selling_price > 0) $min_input.val(b.minimum_selling_price);
 
         validate_expiry_inputs();
+        validate_rate_vs_mrp();
 
         frappe.show_alert({
             message: __('Populated Batch <b>{0}</b> details into form below', [b.batch_id]),
@@ -483,6 +549,7 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
     // Apply to Row (NO premature DB insertion! Batch is saved only when invoice is submitted)
     function apply_to_row() {
         let batch_id = $batch_input.val().trim();
+        let rate_val = flt($rate_input.val());
         let mrp = flt($mrp_input.val());
         let mmyy = $mmyy_input.val().trim();
         let exp_date = $date_input.val();
@@ -494,9 +561,26 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
             return;
         }
 
+        if ($rate_input.val().trim() !== '' && rate_val < 0) {
+            frappe.msgprint(__('Billing / Purchase Rate cannot be negative.'));
+            $rate_input.focus();
+            return;
+        }
+
         if (mrp <= 0) {
             frappe.msgprint(__('Batch MRP must be greater than 0.'));
             $mrp_input.focus();
+            return;
+        }
+
+        // Strict Validation: Billing Rate must always be strictly less than MRP (cannot be >= MRP)
+        if (rate_val > 0 && mrp > 0 && rate_val >= mrp) {
+            frappe.msgprint({
+                title: __('Rate Exceeds or Equals MRP'),
+                indicator: 'red',
+                message: __('Billing / Purchase Rate (<b>{0} {1}</b>) must always be <b>strictly less than</b> Batch MRP (<b>{0} {2}</b>).<br><strong>Equal or higher rates are not permitted.</strong>', [currency, format_currency(rate_val, currency), format_currency(mrp, currency)])
+            });
+            $rate_input.focus();
             return;
         }
 
@@ -542,6 +626,7 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
 
         // Write directly to Purchase Invoice Item row fields
         let batch_field = field_map.batch_field || 'batch_no';
+        let rate_field = field_map.rate_field || 'rate';
         let mrp_field = field_map.mrp_field;
         let expiry_field = field_map.expiry_field;
         let expiry_type = field_map.expiry_fieldtype || 'Data';
@@ -566,23 +651,28 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
             frappe.model.set_value(cdt, cdn, 'batch_no', batch_id);
         }
 
-        // 2. MRP
+        // 2. Billing / Purchase Rate (triggers ERPNext amount and tax recalculation)
+        if ($rate_input.val().trim() !== '' && rate_field && frappe.meta.has_field(cdt, rate_field)) {
+            frappe.model.set_value(cdt, cdn, rate_field, rate_val);
+        }
+
+        // 3. MRP
         if (mrp_field && frappe.meta.has_field(cdt, mrp_field)) {
             frappe.model.set_value(cdt, cdn, mrp_field, mrp);
         }
 
-        // 3. Expiry Date (MM-YY if Data field, or YYYY-MM-DD if Date field)
+        // 4. Expiry Date (MM-YY if Data field, or YYYY-MM-DD if Date field)
         if (expiry_field && frappe.meta.has_field(cdt, expiry_field)) {
             let val_to_set = (expiry_type === 'Date') ? (exp_date || calculated_date) : mmyy;
             frappe.model.set_value(cdt, cdn, expiry_field, val_to_set);
         }
 
-        // 4. Minimum Selling Price
+        // 5. Minimum Selling Price
         if (min_field && frappe.meta.has_field(cdt, min_field) && min_price > 0) {
             frappe.model.set_value(cdt, cdn, min_field, min_price);
         }
 
-        // 5. Serial Numbers
+        // 6. Serial Numbers
         if (serials_formatted) {
             if (serial_field && frappe.meta.has_field(cdt, serial_field)) {
                 frappe.model.set_value(cdt, cdn, serial_field, serials_formatted);
@@ -605,8 +695,15 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
         // Mark row handled for this item and qty
         row.__pba_handled_key = `${item_code}_${current_qty}`;
 
+        let alert_parts = [];
+        if (rate_val > 0) {
+            alert_parts.push(`Rate: ${currency} ${format_currency(rate_val, currency)}`);
+        }
+        alert_parts.push(`MRP: ${currency} ${format_currency(mrp, currency)}`);
+        alert_parts.push(`Exp: ${mmyy}`);
+
         frappe.show_alert({
-            message: __('Row {0}: Applied Batch <b>{1}</b> (MRP: {2}{3}, Exp: {4})', [row.idx || 1, batch_id, currency, mrp, mmyy]),
+            message: __('Row {0}: Applied Batch <b>{1}</b> ({2})', [row.idx || 1, batch_id, alert_parts.join(', ')]),
             indicator: 'green'
         }, 3);
 

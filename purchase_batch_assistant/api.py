@@ -26,6 +26,7 @@ def get_field_mappings():
 
     # Purchase Invoice Item field resolution
     batch_field = find_field(pii_meta, ["custom_batch_number", "batch_no"], "batch_number_field")
+    rate_field = find_field(pii_meta, ["rate"], "rate_field") or "rate"
     mrp_field = find_field(pii_meta, ["custom_mrp", "custom_custom_mrp", "mrp"], "batch_mrp_field")
     expiry_field = find_field(pii_meta, ["custom_expiry_date", "expiry_date"], "batch_expiry_field")
     min_price_field = find_field(pii_meta, ["custom_minimum_selling_price", "minimum_selling_price", "min_selling_price"], "minimum_selling_price_field")
@@ -44,6 +45,7 @@ def get_field_mappings():
 
     return {
         "batch_field": batch_field or "batch_no",
+        "rate_field": rate_field,
         "mrp_field": mrp_field,
         "expiry_field": expiry_field,
         "expiry_fieldtype": expiry_fieldtype,
@@ -126,6 +128,20 @@ def get_item_batch_details(item_code, company=None):
 
     item["minimum_selling_price"] = min_selling_price
 
+    # Query last purchase rate for this item from any submitted Purchase Invoice
+    item_last_purchase_rate = 0.0
+    last_pi = frappe.db.sql("""
+        SELECT pii.rate
+        FROM `tabPurchase Invoice Item` pii
+        INNER JOIN `tabPurchase Invoice` pi ON pii.parent = pi.name
+        WHERE pi.docstatus = 1 AND pii.item_code = %(item_code)s
+        ORDER BY pi.posting_date DESC, pi.creation DESC
+        LIMIT 1
+    """, {"item_code": item_code}, as_dict=True)
+    if last_pi:
+        item_last_purchase_rate = flt(last_pi[0].rate)
+    item["last_purchase_rate"] = item_last_purchase_rate
+
     # Query all active batches for this item
     batches = []
     has_batch_tracking = bool(item.get("has_batch_no"))
@@ -181,6 +197,9 @@ def get_item_batch_details(item_code, company=None):
             last_purchase_rate = flt(pi_match[0].rate)
             if mrp <= 0 and pi_match[0].get("custom_mrp"):
                 mrp = flt(pi_match[0].custom_mrp)
+
+        if last_purchase_rate <= 0 and item_last_purchase_rate > 0:
+            last_purchase_rate = item_last_purchase_rate
 
         # Check expired
         today_date = getdate()
@@ -323,3 +342,28 @@ def validate_serials(item_code, serial_nos):
         "existing_in_database": existing,
         "cleaned_serials": lines
     }
+
+
+def validate_purchase_invoice(doc, method=None):
+    """
+    Server-side validation for Purchase Invoice:
+    Ensures Billing / Purchase Rate is strictly less than MRP (< MRP) for all items.
+    """
+    field_map = get_field_mappings()
+    mrp_field = field_map.get("mrp_field") or "custom_mrp"
+    rate_field = field_map.get("rate_field") or "rate"
+    currency = doc.get("currency") or "₹"
+
+    for row in doc.get("items", []):
+        if not row.get("item_code"):
+            continue
+        rate = flt(row.get(rate_field) if row.get(rate_field) is not None else row.get("rate"))
+        mrp = flt(row.get(mrp_field) if row.get(mrp_field) is not None else row.get("mrp"))
+        if rate > 0 and mrp > 0 and rate >= mrp:
+            frappe.throw(
+                _("Row #{0} ({1}): Billing / Purchase Rate ({2} {3}) must be strictly less than Batch MRP ({2} {4}). Rate cannot be equal to or greater than MRP.").format(
+                    row.idx, row.item_code, currency, rate, mrp
+                ),
+                title=_("Rate Exceeds or Equals MRP")
+            )
+

@@ -294,3 +294,32 @@
     background-color: #fef2f2 !important;
 }
 
+/* Free Item / Scheme Box */
+.pba-free-box {
+    background: #f0fdf4;
+    border: 1px solid #bbf7d0;
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-top: 12px;
+}
+
+.pba-free-box.is-inactive {
+    background: #f8fafc;
+    border-color: #e2e8f0;
+}
+
+.pba-checkbox-label {
+    user-select: none;
+    cursor: pointer;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.pba-checkbox-label input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    accent-color: #15803d;
+    cursor: pointer;
+}
+
+

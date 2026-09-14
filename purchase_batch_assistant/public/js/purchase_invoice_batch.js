@@ -6,6 +6,12 @@ frappe.ui.form.on('Purchase Invoice', {
     refresh: function(frm) {
         // Form level hooks
     },
+    supplier: function(frm) {
+        setTimeout(() => auto_set_tax_category_from_address(frm), 800);
+    },
+    supplier_address: function(frm) {
+        setTimeout(() => auto_set_tax_category_from_address(frm), 200);
+    },
     validate: function(frm) {
         for (let row of (frm.doc.items || [])) {
             if (!row.item_code) continue;
@@ -22,6 +28,24 @@ frappe.ui.form.on('Purchase Invoice', {
         }
     }
 });
+
+async function auto_set_tax_category_from_address(frm) {
+    if (!frm.doc.supplier_address || frm.doc.docstatus !== 0) return;
+    try {
+        const result = await frappe.db.get_value('Address', frm.doc.supplier_address, ['gstin', 'gst_state_number', 'gst_state']);
+        const address = result?.message || {};
+        const gstin = String(address.gstin || '').trim().replace(/\s+/g, '').toUpperCase();
+        if (!gstin) return;
+        const state_code = gstin.substring(0, 2);
+        const tax_category = state_code === '33' ? 'In-State' : 'Out-State';
+        if (frm.doc.tax_category !== tax_category) {
+            await frm.set_value('tax_category', tax_category);
+        }
+    } catch (e) {
+        // Silently pass if address query fails
+    }
+}
+
 
 frappe.ui.form.on('Purchase Invoice Item', {
     item_code: function(frm, cdt, cdn) {

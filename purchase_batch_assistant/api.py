@@ -362,14 +362,16 @@ def validate_serials(item_code, serial_nos):
 
 def validate_purchase_invoice(doc, method=None):
     """
-    Server-side validation for Purchase Invoice:
+    Server-side validation and synchronization for Purchase Invoice:
     1. Ensures Billing / Purchase Rate is strictly less than MRP (< MRP) for all items.
-    2. Overrides / synchronizes batch MRP and Item minimum selling price when provided.
+    2. Overrides / creates / synchronizes Batch records (MRP, Expiry, batch_no) automatically.
+    3. Overrides / synchronizes Item minimum selling price when provided.
     """
     field_map = get_field_mappings()
     mrp_field = field_map.get("mrp_field") or "custom_mrp"
     rate_field = field_map.get("rate_field") or "rate"
     batch_field = field_map.get("batch_field") or "custom_batch_number"
+    expiry_field = field_map.get("expiry_field") or "custom_expiry_date"
     min_price_field = field_map.get("min_price_field") or "custom_minimum_selling_price"
     batch_mrp_col = field_map.get("batch_mrp_field") or "custom_custom_mrp"
     currency = doc.get("currency") or "₹"
@@ -377,8 +379,11 @@ def validate_purchase_invoice(doc, method=None):
     for row in doc.get("items", []):
         if not row.get("item_code"):
             continue
+
         rate = flt(row.get(rate_field) if row.get(rate_field) is not None else row.get("rate"))
         mrp = flt(row.get(mrp_field) if row.get(mrp_field) is not None else row.get("mrp"))
+
+        # 1. Rate < MRP validation
         if rate > 0 and mrp > 0 and rate >= mrp:
             frappe.throw(
                 _("Row #{0} ({1}): Billing / Purchase Rate ({2} {3}) must be strictly less than Batch MRP ({2} {4}). Rate cannot be equal to or greater than MRP.").format(
@@ -387,7 +392,48 @@ def validate_purchase_invoice(doc, method=None):
                 title=_("Rate Exceeds or Equals MRP")
             )
 
-        # Sync/Override Minimum Selling Price on Item master if set on row
+        # 2. Batch Creation & Override
+        batch_number = row.get(batch_field) or row.get("batch_no")
+        if batch_number:
+            batch_number = str(batch_number).strip()
+            exp_val = row.get(expiry_field) or row.get("expiry_date")
+            parsed_exp = None
+            if exp_val:
+                exp_str = str(exp_val).strip()
+                if "-" in exp_str and len(exp_str) <= 7:
+                    parsed_exp = parse_mm_yy_to_date(exp_str)
+                else:
+                    parsed_exp = exp_str
+
+            existing_name = frappe.db.get_value("Batch", {"batch_id": batch_number}, "name")
+            if not existing_name and frappe.db.exists("Batch", batch_number):
+                existing_name = batch_number
+
+            if existing_name:
+                batch_doc = frappe.get_doc("Batch", existing_name)
+                updated = False
+                if parsed_exp and str(batch_doc.expiry_date) != str(parsed_exp):
+                    batch_doc.expiry_date = parsed_exp
+                    updated = True
+                if mrp > 0 and batch_mrp_col and flt(batch_doc.get(batch_mrp_col)) != mrp:
+                    batch_doc.set(batch_mrp_col, mrp)
+                    updated = True
+                if updated:
+                    batch_doc.save(ignore_permissions=True)
+                row.batch_no = existing_name
+            else:
+                # Create brand new batch
+                new_b = frappe.new_doc("Batch")
+                new_b.batch_id = batch_number
+                new_b.item = row.item_code
+                if parsed_exp:
+                    new_b.expiry_date = parsed_exp
+                if mrp > 0 and batch_mrp_col:
+                    new_b.set(batch_mrp_col, mrp)
+                new_b.insert(ignore_permissions=True)
+                row.batch_no = new_b.name
+
+        # 3. Item Minimum Selling Price
         min_price = flt(row.get(min_price_field) if min_price_field and row.get(min_price_field) is not None else row.get("minimum_selling_price"))
         if min_price > 0 and frappe.db.has_column("Item", "minimum_selling_price"):
             curr_min = flt(frappe.db.get_value("Item", row.item_code, "minimum_selling_price"))

@@ -129,17 +129,26 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
 
     // Prefill existing row values if present
     let initial_batch = row[field_map.batch_field] || row.batch_no || '';
-    let initial_rate = (field_map.rate_field && flt(row[field_map.rate_field])) || flt(row.rate) || flt(row.price_list_rate) || flt(data.item?.last_purchase_rate) || flt(data.item?.standard_rate) || '';
+    let initial_free_qty = flt(row[field_map.free_qty_field || 'custom_free_qty']) || flt(row.custom_free_qty) || 0;
+    
+    // Check if legacy companion free row exists
+    let batch_field = field_map.batch_field || 'batch_no';
+    let legacy_free_row = (frm.doc.items || []).find(r => r.is_free_item && (r.__pba_parent_cdn === cdn || (r.item_code === item_code && initial_batch && r[batch_field] === initial_batch)));
+    if (!initial_free_qty && legacy_free_row) {
+        initial_free_qty = flt(legacy_free_row.qty);
+    }
+    let is_free_initially_checked = initial_free_qty > 0;
+
+    // Billed Quantity (excluding free units)
+    let initial_billed_qty = flt(row[field_map.billed_qty_field || 'custom_billed_qty']) || (initial_free_qty > 0 ? (flt(row.qty) - initial_free_qty) : flt(row.qty)) || 1.0;
+    if (initial_billed_qty <= 0) initial_billed_qty = 1.0;
+    current_qty = initial_billed_qty;
+
+    let initial_rate = flt(row[field_map.billed_rate_field || 'custom_billed_rate']) || (field_map.rate_field && flt(row[field_map.rate_field])) || flt(row.rate) || flt(row.price_list_rate) || flt(data.item?.last_purchase_rate) || flt(data.item?.standard_rate) || '';
     let initial_mrp = flt(row[field_map.mrp_field]) || '';
     let initial_expiry = row[field_map.expiry_field] || '';
     let initial_min_price = (field_map.min_price_field ? flt(row[field_map.min_price_field]) : '') || data.item?.minimum_selling_price || '';
     let initial_serials = (field_map.serial_field ? row[field_map.serial_field] : '') || row.serial_no || '';
-
-    // Check if companion free item row exists
-    let batch_field = field_map.batch_field || 'batch_no';
-    let existing_free_row = (frm.doc.items || []).find(r => r.is_free_item && (r.__pba_parent_cdn === cdn || (r.item_code === item_code && initial_batch && r[batch_field] === initial_batch)));
-    let initial_free_qty = existing_free_row ? flt(existing_free_row.qty) : 0;
-    let is_free_initially_checked = initial_free_qty > 0;
 
     let dialog = new frappe.ui.Dialog({
         title: __('Batch & Serial Assistant — {0}', [item_code]),
@@ -430,10 +439,10 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
         let effective_rate = total_q > 0 ? (total_amount / total_q) : 0;
 
         let summary_html = `
-            <strong>${__('Scheme Impact:')}</strong><br>
-            • ${__('Billed Qty:')} <strong>${billed_q}</strong> @ ${currency} ${format_currency(rate, currency)} = <strong>${currency} ${format_currency(total_amount, currency)}</strong><br>
-            • ${__('Free Qty:')} <strong>${free_q}</strong> @ ${currency} 0.00 (Standard Free Line)<br>
-            • <strong>${__('Total Batch Stock Added:')} ${total_q} ${stock_uom}</strong> (Valuation: ${currency} ${format_currency(effective_rate, currency)}/unit)
+            <strong>${__('Single-Row Scheme Impact:')}</strong><br>
+            • ${__('Purchased Billed Units:')} <strong>${billed_q}</strong> @ ${currency} ${format_currency(rate, currency)} = <strong>${currency} ${format_currency(total_amount, currency)}</strong><br>
+            • ${__('Free Quantity Column:')} <strong>+${free_q} Free</strong> (Stored in Free Qty column on this row)<br>
+            • <strong>${__('Total Row Qty to Add to Inventory:')} ${total_q} ${stock_uom}</strong> (Valuation Rate: ${currency} ${format_currency(effective_rate, currency)}/unit)
         `;
         $free_summary.html(summary_html);
         $serial_total_qty.text(total_q);
@@ -675,7 +684,10 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
             return;
         }
 
-        let total_stock_units = current_qty + free_qty;
+        let billed_qty = current_qty;
+        let total_stock_units = is_free_checked ? (billed_qty + free_qty) : billed_qty;
+        let total_billed_amount = billed_qty * rate_val;
+        let effective_rate = (total_stock_units > 0 && is_free_checked) ? (total_billed_amount / total_stock_units) : rate_val;
 
         // Serial Number Handling
         let raw_serials = $serial_input.val().trim();
@@ -701,8 +713,25 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
         let expiry_type = field_map.expiry_fieldtype || 'Data';
         let min_field = field_map.min_price_field;
         let serial_field = field_map.serial_field || 'serial_no';
+        let free_field = field_map.free_qty_field || 'custom_free_qty';
+        let billed_q_field = field_map.billed_qty_field || 'custom_billed_qty';
+        let billed_r_field = field_map.billed_rate_field || 'custom_billed_rate';
 
-        // 1. Batch Number
+        // 1. Single-Row Free Quantity & Billed Quantity Columns
+        if (free_field && frappe.meta.has_field(cdt, free_field)) {
+            frappe.model.set_value(cdt, cdn, free_field, is_free_checked ? free_qty : 0);
+        }
+        if (billed_q_field && frappe.meta.has_field(cdt, billed_q_field)) {
+            frappe.model.set_value(cdt, cdn, billed_q_field, billed_qty);
+        }
+        if (billed_r_field && frappe.meta.has_field(cdt, billed_r_field) && rate_val > 0) {
+            frappe.model.set_value(cdt, cdn, billed_r_field, rate_val);
+        }
+
+        // Update total row quantity = purchased + free
+        frappe.model.set_value(cdt, cdn, 'qty', total_stock_units);
+
+        // 2. Batch Number
         if (batch_field && frappe.meta.has_field(cdt, batch_field)) {
             frappe.model.set_value(cdt, cdn, batch_field, batch_id);
         }
@@ -718,31 +747,32 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
             frappe.model.set_value(cdt, cdn, 'batch_no', batch_id);
         }
 
-        // 2. Billing / Purchase Rate (triggers ERPNext amount and tax recalculation)
+        // 3. Billing / Purchase Rate (effective valuation rate if free units present)
         if ($rate_input.val().trim() !== '' && rate_field && frappe.meta.has_field(cdt, rate_field)) {
-            frappe.model.set_value(cdt, cdn, rate_field, rate_val);
+            let final_rate = (is_free_checked && free_qty > 0) ? effective_rate : rate_val;
+            frappe.model.set_value(cdt, cdn, rate_field, final_rate);
             if (frappe.meta.has_field(cdt, 'price_list_rate')) {
-                frappe.model.set_value(cdt, cdn, 'price_list_rate', rate_val);
+                frappe.model.set_value(cdt, cdn, 'price_list_rate', final_rate);
             }
         }
 
-        // 3. MRP
+        // 4. MRP
         if (mrp_field && frappe.meta.has_field(cdt, mrp_field)) {
             frappe.model.set_value(cdt, cdn, mrp_field, mrp);
         }
 
-        // 4. Expiry Date (MM-YY if Data field, or YYYY-MM-DD if Date field)
+        // 5. Expiry Date (MM-YY if Data field, or YYYY-MM-DD if Date field)
         let expiry_val = (expiry_type === 'Date') ? calculated_date : mmyy;
         if (expiry_field && frappe.meta.has_field(cdt, expiry_field)) {
             frappe.model.set_value(cdt, cdn, expiry_field, expiry_val);
         }
 
-        // 5. Minimum Selling Price
+        // 6. Minimum Selling Price
         if (min_field && frappe.meta.has_field(cdt, min_field) && min_price > 0) {
             frappe.model.set_value(cdt, cdn, min_field, min_price);
         }
 
-        // 6. Serial Numbers
+        // 7. Serial Numbers
         if (serials_formatted) {
             if (serial_field && frappe.meta.has_field(cdt, serial_field)) {
                 frappe.model.set_value(cdt, cdn, serial_field, serials_formatted);
@@ -757,41 +787,9 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
             frappe.model.set_value(cdt, cdn, 'use_serial_batch_fields', 1);
         }
 
-        // 7. Companion Free Item Row Handling
+        // 8. Clean up any legacy companion free rows so only 1 row exists
         let companion_row = (frm.doc.items || []).find(r => r.is_free_item && (r.__pba_parent_cdn === cdn || (r.item_code === item_code && r[batch_field] === batch_id)));
-
-        if (is_free_checked && free_qty > 0) {
-            if (!companion_row) {
-                companion_row = frm.add_child('items');
-            }
-            companion_row.item_code = item_code;
-            companion_row.qty = free_qty;
-            companion_row.rate = 0;
-            companion_row.price_list_rate = 0;
-            companion_row.discount_percentage = 0;
-            companion_row.is_free_item = 1;
-            companion_row.__pba_parent_cdn = cdn;
-            companion_row.description = `${row.description || item_name} (Free / Scheme)`;
-
-            if (batch_field && frappe.meta.has_field(cdt, batch_field)) {
-                companion_row[batch_field] = batch_id;
-            }
-            if (is_existing_batch && frappe.meta.has_field(cdt, 'batch_no')) {
-                companion_row.batch_no = matched_batch_name || batch_id;
-            } else if (batch_field === 'batch_no') {
-                companion_row.batch_no = batch_id;
-            }
-            if (mrp_field && frappe.meta.has_field(cdt, mrp_field)) {
-                companion_row[mrp_field] = mrp;
-            }
-            if (expiry_field && frappe.meta.has_field(cdt, expiry_field)) {
-                companion_row[expiry_field] = expiry_val;
-            }
-            if (frappe.meta.has_field(cdt, 'use_serial_batch_fields')) {
-                companion_row.use_serial_batch_fields = 1;
-            }
-        } else if (companion_row && companion_row.__pba_parent_cdn === cdn) {
-            // Remove companion free row if unchecked
+        if (companion_row) {
             frappe.model.clear_doc(companion_row.doctype, companion_row.name);
             frm.doc.items = (frm.doc.items || []).filter(r => r.name !== companion_row.name);
         }

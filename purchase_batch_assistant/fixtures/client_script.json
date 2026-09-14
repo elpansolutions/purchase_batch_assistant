@@ -1,0 +1,13 @@
+[
+ {
+  "docstatus": 0,
+  "doctype": "Client Script",
+  "dt": "Purchase Invoice",
+  "enabled": 1,
+  "modified": "2026-09-14 11:36:18.243509",
+  "module": null,
+  "name": "tax category autoset purchase invoice",
+  "script": "frappe.ui.form.on(\"Purchase Invoice\", {\n    supplier(frm) {\n        setTimeout(() => set_supplier_tax_category(frm, true), 1000);\n    },\n\n    supplier_address(frm) {\n        setTimeout(() => set_supplier_tax_category(frm, true), 300);\n    },\n\n    validate(frm) {\n        return set_supplier_tax_category(frm, false);\n    }\n});\n\n\nasync function set_supplier_tax_category(frm, trigger_change = false) {\n    if (!frm.doc.supplier_address || frm.doc.docstatus !== 0) {\n        return;\n    }\n\n    const result = await frappe.db.get_value(\n        \"Address\",\n        frm.doc.supplier_address,\n        [\"gstin\", \"gst_state_number\", \"gst_state\"]\n    );\n\n    const address = result?.message || {};\n\n    const gstin = String(address.gstin || \"\")\n        .trim()\n        .replace(/\\s+/g, \"\")\n        .toUpperCase();\n\n    if (!gstin) {\n        return;\n    }\n\n    const state_code = gstin.substring(0, 2);\n    const tax_category = state_code === \"33\" ? \"In-State\" : \"Out-State\";\n\n    if (frm.doc.tax_category !== tax_category) {\n        if (trigger_change) {\n            await frm.set_value(\"tax_category\", tax_category);\n        } else {\n            frm.doc.tax_category = tax_category;\n            frm.refresh_field(\"tax_category\");\n        }\n    }\n}",
+  "view": "Form"
+ }
+]

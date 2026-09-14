@@ -32,6 +32,10 @@ def get_field_mappings():
     min_price_field = find_field(pii_meta, ["custom_minimum_selling_price", "minimum_selling_price", "min_selling_price"], "minimum_selling_price_field")
     serial_field = find_field(pii_meta, ["custom_serial_no", "custom_serial_number", "serial_no"], "serial_number_field")
 
+    free_qty_field = find_field(pii_meta, ["custom_free_qty", "free_qty"])
+    billed_qty_field = find_field(pii_meta, ["custom_billed_qty", "billed_qty"])
+    billed_rate_field = find_field(pii_meta, ["custom_billed_rate", "billed_rate"])
+
     # Expiry field type on Purchase Invoice Item (Data vs Date)
     expiry_fieldtype = "Data"
     if expiry_field:
@@ -51,6 +55,9 @@ def get_field_mappings():
         "expiry_fieldtype": expiry_fieldtype,
         "min_price_field": min_price_field,
         "serial_field": serial_field or "serial_no",
+        "free_qty_field": free_qty_field or "custom_free_qty",
+        "billed_qty_field": billed_qty_field or "custom_billed_qty",
+        "billed_rate_field": billed_rate_field or "custom_billed_rate",
         "batch_mrp_field": batch_mrp_field,
         "batch_min_price_field": batch_min_price_field,
         "enable_assistant": cint(settings.get("enable_assistant", 1)),
@@ -265,19 +272,21 @@ def create_or_get_batch(item_code, batch_id, expiry_date=None, expiry_mm_yy=None
                 batch_id, batch.item, item_code
             ))
         
-        # If existing batch lacks expiry or MRP, update them
+        # Override / update existing batch details when new values are provided
         updated = False
-        if expiry_date and not batch.expiry_date:
+        if expiry_date and str(batch.expiry_date) != str(expiry_date):
             batch.expiry_date = expiry_date
             updated = True
         
-        if mrp and batch_mrp_col and flt(batch.get(batch_mrp_col)) <= 0:
-            batch.set(batch_mrp_col, flt(mrp))
-            updated = True
+        if mrp is not None and batch_mrp_col and flt(mrp) > 0:
+            if flt(batch.get(batch_mrp_col)) != flt(mrp):
+                batch.set(batch_mrp_col, flt(mrp))
+                updated = True
 
-        if min_selling_price and batch_min_col and flt(batch.get(batch_min_col)) <= 0:
-            batch.set(batch_min_col, flt(min_selling_price))
-            updated = True
+        if min_selling_price is not None and batch_min_col and flt(min_selling_price) > 0:
+            if flt(batch.get(batch_min_col)) != flt(min_selling_price):
+                batch.set(batch_min_col, flt(min_selling_price))
+                updated = True
 
         if updated:
             batch.save(ignore_permissions=True)
@@ -297,6 +306,13 @@ def create_or_get_batch(item_code, batch_id, expiry_date=None, expiry_mm_yy=None
         
         batch.insert(ignore_permissions=True)
         batch_name = batch.name
+
+    # Update Minimum Selling Price on Item Master if provided and changed
+    if min_selling_price and flt(min_selling_price) > 0:
+        if frappe.db.has_column("Item", "minimum_selling_price"):
+            current_item_min = flt(frappe.db.get_value("Item", item_code, "minimum_selling_price"))
+            if current_item_min != flt(min_selling_price):
+                frappe.db.set_value("Item", item_code, "minimum_selling_price", flt(min_selling_price))
 
     return {
         "name": batch_name,
@@ -347,11 +363,15 @@ def validate_serials(item_code, serial_nos):
 def validate_purchase_invoice(doc, method=None):
     """
     Server-side validation for Purchase Invoice:
-    Ensures Billing / Purchase Rate is strictly less than MRP (< MRP) for all items.
+    1. Ensures Billing / Purchase Rate is strictly less than MRP (< MRP) for all items.
+    2. Overrides / synchronizes batch MRP and Item minimum selling price when provided.
     """
     field_map = get_field_mappings()
     mrp_field = field_map.get("mrp_field") or "custom_mrp"
     rate_field = field_map.get("rate_field") or "rate"
+    batch_field = field_map.get("batch_field") or "custom_batch_number"
+    min_price_field = field_map.get("min_price_field") or "custom_minimum_selling_price"
+    batch_mrp_col = field_map.get("batch_mrp_field") or "custom_custom_mrp"
     currency = doc.get("currency") or "₹"
 
     for row in doc.get("items", []):
@@ -366,4 +386,11 @@ def validate_purchase_invoice(doc, method=None):
                 ),
                 title=_("Rate Exceeds or Equals MRP")
             )
+
+        # Sync/Override Minimum Selling Price on Item master if set on row
+        min_price = flt(row.get(min_price_field) if min_price_field and row.get(min_price_field) is not None else row.get("minimum_selling_price"))
+        if min_price > 0 and frappe.db.has_column("Item", "minimum_selling_price"):
+            curr_min = flt(frappe.db.get_value("Item", row.item_code, "minimum_selling_price"))
+            if curr_min != min_price:
+                frappe.db.set_value("Item", row.item_code, "minimum_selling_price", min_price)
 

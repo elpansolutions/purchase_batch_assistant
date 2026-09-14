@@ -50,13 +50,14 @@ async function auto_set_tax_category_from_address(frm) {
 frappe.ui.form.on('Purchase Invoice Item', {
     item_code: function(frm, cdt, cdn) {
         let row = locals[cdt]?.[cdn];
-        if (!row || !row.item_code || row.is_free_item) return;
+        if (!row || !row.item_code || row.is_free_item || row.__pba_applying || window.__pba_active_dialog) return;
 
         row.__pba_handled_key = null;
 
         // Trigger if quantity is already entered
         if (flt(row.qty) > 0) {
             setTimeout(() => {
+                if (row.__pba_applying || window.__pba_active_dialog) return;
                 trigger_purchase_batch_assistant(frm, cdt, cdn, false);
             }, 300);
         }
@@ -64,13 +65,19 @@ frappe.ui.form.on('Purchase Invoice Item', {
 
     qty: function(frm, cdt, cdn) {
         let row = locals[cdt]?.[cdn];
-        if (!row || !row.item_code || row.is_free_item) return;
+        if (!row || !row.item_code || row.is_free_item || row.__pba_applying || window.__pba_active_dialog) return;
 
-        // Reset handled key so modifying or tabbing out on qty always permits re-opening
+        let current_handle_key = `${row.item_code}_${flt(row.qty)}`;
+        if (row.__pba_handled_key === current_handle_key) {
+            return;
+        }
+
+        // Reset handled key when user manually modifies qty
         row.__pba_handled_key = null;
 
         if (flt(row.qty) > 0) {
             setTimeout(() => {
+                if (row.__pba_applying || window.__pba_active_dialog) return;
                 trigger_purchase_batch_assistant(frm, cdt, cdn, false);
             }, 300);
         }
@@ -99,7 +106,7 @@ frappe.ui.form.on('Purchase Invoice Item', {
 
 function trigger_purchase_batch_assistant(frm, cdt, cdn, is_manual) {
     let row = locals[cdt]?.[cdn];
-    if (!row || !row.item_code || row.is_free_item) return;
+    if (!row || !row.item_code || row.is_free_item || row.__pba_applying) return;
 
     let qty = flt(row.qty);
     if (qty <= 0) {
@@ -458,18 +465,16 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
         let billed_q = current_qty;
         let free_q = flt($free_qty_input.val()) || 0;
         let rate = flt($rate_input.val()) || 0;
-        let total_q = billed_q + free_q;
         let total_amount = billed_q * rate;
-        let effective_rate = total_q > 0 ? (total_amount / total_q) : 0;
 
         let summary_html = `
-            <strong>${__('Single-Row Scheme Impact:')}</strong><br>
-            • ${__('Purchased Billed Units:')} <strong>${billed_q}</strong> @ ${currency} ${format_currency(rate, currency)} = <strong>${currency} ${format_currency(total_amount, currency)}</strong><br>
-            • ${__('Free Quantity Column:')} <strong>+${free_q} Free</strong> (Stored in Free Qty column on this row)<br>
-            • <strong>${__('Total Row Qty to Add to Inventory:')} ${total_q} ${stock_uom}</strong> (Valuation Rate: ${currency} ${format_currency(effective_rate, currency)}/unit)
+            <strong>${__('Free Scheme Breakdown:')}</strong><br>
+            • ${__('Accepted / Billed Qty:')} <strong>${billed_q} ${stock_uom}</strong> @ ${currency} ${format_currency(rate, currency)} = <strong>${currency} ${format_currency(total_amount, currency)}</strong><br>
+            • ${__('Free Quantity Column:')} <strong>+${free_q} Free</strong> (Tracked in Free Qty column, standard rate & amount preserved)<br>
+            • <strong>${__('GST & Financials:')}</strong> Tax calculated cleanly on invoice amount <strong>${currency} ${format_currency(total_amount, currency)}</strong> (No rate averaging)
         `;
         $free_summary.html(summary_html);
-        $serial_total_qty.text(total_q);
+        $serial_total_qty.text(billed_q + free_q);
         update_serial_count();
     }
 
@@ -641,6 +646,8 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
 
     // Apply to Row (NO premature DB insertion! Batch is saved only when invoice is submitted)
     function apply_to_row() {
+        row.__pba_applying = true;
+
         let batch_id = $batch_input.val().trim();
         let rate_val = flt($rate_input.val());
         let mrp = flt($mrp_input.val());
@@ -650,18 +657,21 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
         if (!batch_id) {
             frappe.msgprint(__('Batch Number is required.'));
             $batch_input.focus();
+            row.__pba_applying = false;
             return;
         }
 
         if ($rate_input.val().trim() !== '' && rate_val < 0) {
             frappe.msgprint(__('Billing / Purchase Rate cannot be negative.'));
             $rate_input.focus();
+            row.__pba_applying = false;
             return;
         }
 
         if (mrp <= 0) {
             frappe.msgprint(__('Batch MRP must be greater than 0.'));
             $mrp_input.focus();
+            row.__pba_applying = false;
             return;
         }
 
@@ -673,6 +683,7 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
                 message: __('Billing / Purchase Rate (<b>{0} {1}</b>) must always be <b>strictly less than</b> Batch MRP (<b>{0} {2}</b>).<br><strong>Equal or higher rates are not permitted.</strong>', [currency, format_currency(rate_val, currency), format_currency(mrp, currency)])
             });
             $rate_input.focus();
+            row.__pba_applying = false;
             return;
         }
 
@@ -680,12 +691,14 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
         if (!mmyy) {
             frappe.msgprint(__('Expiry Date is required in MM-YY format (e.g. 08-27).'));
             $mmyy_input.focus();
+            row.__pba_applying = false;
             return;
         }
 
         if (!/^(0[1-9]|1[0-2])-\d{2}$/.test(mmyy)) {
             frappe.msgprint(__('Expiry Date must be in valid MM-YY format (Example: 08-27).'));
             $mmyy_input.focus();
+            row.__pba_applying = false;
             return;
         }
 
@@ -697,6 +710,7 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
                 message: __('The Expiry Date ({0}) is already expired or in the past.<br><strong>Purchases cannot accept expired products.</strong> Please enter a future expiry date.', [mmyy])
             });
             $mmyy_input.focus();
+            row.__pba_applying = false;
             return;
         }
 
@@ -705,29 +719,33 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
         if (is_free_checked && free_qty <= 0) {
             frappe.msgprint(__('Please specify a valid Free Quantity greater than 0.'));
             $free_qty_input.focus();
+            row.__pba_applying = false;
             return;
         }
 
         let billed_qty = current_qty;
         let total_stock_units = is_free_checked ? (billed_qty + free_qty) : billed_qty;
-        let total_billed_amount = billed_qty * rate_val;
-        let effective_rate = (total_stock_units > 0 && is_free_checked) ? (total_billed_amount / total_stock_units) : rate_val;
 
         // Serial Number Handling
         let raw_serials = $serial_input.val().trim();
         let serials_formatted = '';
         if (raw_serials) {
             let lines = raw_serials.replace(/,/g, '\n').split('\n').map(s => s.trim()).filter(Boolean);
-            if (data.has_serial_tracking && lines.length !== total_stock_units) {
-                frappe.msgprint(__('Entered {0} serial numbers, but total units (billed + free) is {1}. Please match the quantity.', [lines.length, total_stock_units]));
+            if (data.has_serial_tracking && lines.length !== total_stock_units && lines.length !== billed_qty) {
+                frappe.msgprint(__('Entered {0} serial numbers, but quantity is {1}. Please match the serial count.', [lines.length, billed_qty]));
+                row.__pba_applying = false;
                 return;
             }
             serials_formatted = lines.join('\n');
         } else if (data.has_serial_tracking) {
-            frappe.msgprint(__('Serial Numbers are required for this item (Quantity: {0}).', [total_stock_units]));
+            frappe.msgprint(__('Serial Numbers are required for this item (Quantity: {0}).', [billed_qty]));
             $serial_input.focus();
+            row.__pba_applying = false;
             return;
         }
+
+        // Set handle key before modifying fields to lock out duplicate popup trigger
+        row.__pba_handled_key = `${item_code}_${billed_qty}`;
 
         // Write directly to Purchase Invoice Item row fields
         let batch_field = field_map.batch_field || 'batch_no';
@@ -752,8 +770,8 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
             frappe.model.set_value(cdt, cdn, billed_r_field, rate_val);
         }
 
-        // Update total row quantity = purchased + free
-        frappe.model.set_value(cdt, cdn, 'qty', total_stock_units);
+        // Keep row accepted / billed quantity as exact entered qty (e.g. 20)
+        frappe.model.set_value(cdt, cdn, 'qty', billed_qty);
 
         // 2. Batch Number
         if (batch_field && frappe.meta.has_field(cdt, batch_field)) {
@@ -771,12 +789,11 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
             frappe.model.set_value(cdt, cdn, 'batch_no', batch_id);
         }
 
-        // 3. Billing / Purchase Rate (effective valuation rate if free units present)
+        // 3. Billing / Purchase Rate (exact entered purchase rate, NO rate averaging)
         if ($rate_input.val().trim() !== '' && rate_field && frappe.meta.has_field(cdt, rate_field)) {
-            let final_rate = (is_free_checked && free_qty > 0) ? effective_rate : rate_val;
-            frappe.model.set_value(cdt, cdn, rate_field, final_rate);
+            frappe.model.set_value(cdt, cdn, rate_field, rate_val);
             if (frappe.meta.has_field(cdt, 'price_list_rate')) {
-                frappe.model.set_value(cdt, cdn, 'price_list_rate', final_rate);
+                frappe.model.set_value(cdt, cdn, 'price_list_rate', rate_val);
             }
         }
 
@@ -823,9 +840,6 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
             frm.refresh_field('items');
         }
 
-        // Mark row handled for this item and qty
-        row.__pba_handled_key = `${item_code}_${current_qty}`;
-
         let alert_parts = [];
         if (rate_val > 0) {
             alert_parts.push(`Rate: ${currency} ${format_currency(rate_val, currency)}`);
@@ -841,7 +855,12 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
             indicator: 'green'
         }, 3);
 
+        window.__pba_active_dialog = false;
         dialog.hide();
+
+        setTimeout(() => {
+            row.__pba_applying = false;
+        }, 600);
 
         // Keyboard Navigation: Focus current row's MRP/Rate column without triggering Frappe's auto-add-row
         setTimeout(() => {

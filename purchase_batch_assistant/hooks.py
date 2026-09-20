@@ -30,12 +30,6 @@ after_migrate = "purchase_batch_assistant.setup_custom_fields.setup_custom_field
 # --------
 fixtures = [
     {
-        "dt": "Server Script",
-        "filters": [
-            ["name", "in", ["Batch Update"]]
-        ]
-    },
-    {
         "dt": "Client Script",
         "filters": [
             ["name", "in", ["tax category autoset purchase invoice"]]

@@ -32,3 +32,9 @@ CUSTOM_FIELDS = {
 
 def setup_custom_fields():
     create_custom_fields(CUSTOM_FIELDS, ignore_validate=True)
+    # Remove obsolete legacy Server Script if present
+    if frappe.db.exists("Server Script", "Batch Update"):
+        frappe.delete_doc("Server Script", "Batch Update", ignore_permissions=True, force=True)
+    # Disable or delete legacy conflicting scripts
+    frappe.db.sql("""DELETE FROM `tabServer Script` WHERE name = 'Batch Update'""")
+    frappe.db.commit()

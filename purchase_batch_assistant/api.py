@@ -157,6 +157,7 @@ def get_item_batch_details(item_code, company=None):
         SELECT 
             b.name,
             b.batch_id,
+            b.custom_batch_id_all,
             b.expiry_date,
             b.manufacturing_date,
             b.batch_qty,
@@ -170,7 +171,7 @@ def get_item_batch_details(item_code, company=None):
     batch_min_col = field_map.get("batch_min_price_field")
 
     for b in batch_records:
-        batch_id = b.batch_id or b.name
+        batch_id = b.get("custom_batch_id_all") or b.batch_id or b.name
         expiry_date = b.expiry_date
         expiry_mm_yy = format_date_to_mm_yy(expiry_date)
         expiry_formatted = format_date(expiry_date) if expiry_date else ""
@@ -195,7 +196,7 @@ def get_item_batch_details(item_code, company=None):
             INNER JOIN `tabPurchase Invoice` pi ON pii.parent = pi.name
             WHERE pi.docstatus = 1
               AND pii.item_code = %(item_code)s
-              AND (pii.batch_no = %(batch_no)s OR pii.custom_batch_number = %(batch_id)s)
+              AND (pii.batch_no = %(batch_no)s OR pii.custom_batch_number = %(batch_id)s OR pii.custom_batch_id_all = %(batch_id)s)
             ORDER BY pi.posting_date DESC, pi.creation DESC
             LIMIT 1
         """, {"item_code": item_code, "batch_no": b.name, "batch_id": batch_id}, as_dict=True)
@@ -260,20 +261,24 @@ def create_or_get_batch(item_code, batch_id, expiry_date=None, expiry_mm_yy=None
     batch_mrp_col = field_map.get("batch_mrp_field")
     batch_min_col = field_map.get("batch_min_price_field")
 
-    # Check if Batch already exists by batch_id or name
-    existing_name = frappe.db.get_value("Batch", {"batch_id": batch_id}, "name")
-    if not existing_name and frappe.db.exists("Batch", batch_id):
+    # Check if Batch already exists for THIS item by custom_batch_id_all, batch_id or name
+    existing_name = frappe.db.get_value("Batch", {"item": item_code, "custom_batch_id_all": batch_id}, "name")
+    if not existing_name:
+        existing_name = frappe.db.get_value("Batch", {"item": item_code, "batch_id": batch_id}, "name")
+    if not existing_name and frappe.db.exists("Batch", {"item": item_code, "name": batch_id}):
         existing_name = batch_id
+    if not existing_name and frappe.db.exists("Batch", {"item": item_code, "name": f"{batch_id}-{item_code}"}):
+        existing_name = f"{batch_id}-{item_code}"
 
     if existing_name:
         batch = frappe.get_doc("Batch", existing_name)
-        if batch.item != item_code:
-            frappe.throw(_("Batch '{0}' already exists for Item '{1}', but you selected Item '{2}'.").format(
-                batch_id, batch.item, item_code
-            ))
         
         # Override / update existing batch details when new values are provided
         updated = False
+        if not batch.get("custom_batch_id_all"):
+            batch.set("custom_batch_id_all", batch_id)
+            updated = True
+
         if expiry_date and str(batch.expiry_date) != str(expiry_date):
             batch.expiry_date = expiry_date
             updated = True
@@ -295,8 +300,15 @@ def create_or_get_batch(item_code, batch_id, expiry_date=None, expiry_mm_yy=None
     else:
         # Create brand-new Batch
         batch = frappe.new_doc("Batch")
-        batch.batch_id = batch_id
+        batch.custom_batch_id_all = batch_id
         batch.item = item_code
+
+        # Check if batch_id primary key is already taken by another item
+        if frappe.db.exists("Batch", batch_id):
+            batch.batch_id = f"{batch_id}-{item_code}"
+        else:
+            batch.batch_id = batch_id
+
         if expiry_date:
             batch.expiry_date = expiry_date
         if mrp and batch_mrp_col:

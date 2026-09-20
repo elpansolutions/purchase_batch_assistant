@@ -56,7 +56,8 @@ frappe.ui.form.on('Purchase Invoice Item', {
 
         // Trigger if quantity is already entered
         if (flt(row.qty) > 0) {
-            setTimeout(() => {
+            clearTimeout(row.__pba_qty_timer);
+            row.__pba_qty_timer = setTimeout(() => {
                 if (row.__pba_applying || window.__pba_active_dialog) return;
                 trigger_purchase_batch_assistant(frm, cdt, cdn, false);
             }, 300);
@@ -67,18 +68,14 @@ frappe.ui.form.on('Purchase Invoice Item', {
         let row = locals[cdt]?.[cdn];
         if (!row || !row.item_code || row.is_free_item || row.__pba_applying || window.__pba_active_dialog) return;
 
-        let current_handle_key = `${row.item_code}_${flt(row.qty)}`;
-        if (row.__pba_handled_key === current_handle_key) {
-            return;
-        }
-
-        // Reset handled key when user manually modifies qty
+        // Reset handled key when user enters or modifies qty
         row.__pba_handled_key = null;
 
         if (flt(row.qty) > 0) {
-            setTimeout(() => {
+            clearTimeout(row.__pba_qty_timer);
+            row.__pba_qty_timer = setTimeout(() => {
                 if (row.__pba_applying || window.__pba_active_dialog) return;
-                trigger_purchase_batch_assistant(frm, cdt, cdn, false);
+                trigger_purchase_batch_assistant(frm, cdt, cdn, true);
             }, 300);
         }
     },
@@ -116,12 +113,8 @@ function trigger_purchase_batch_assistant(frm, cdt, cdn, is_manual) {
         return;
     }
 
-    // Avoid infinite loop if already open or handled for this item and qty
+    // Avoid infinite loop if dialog already active
     if (window.__pba_active_dialog) return;
-    let handle_key = `${row.item_code}_${qty}`;
-    if (!is_manual && row.__pba_handled_key === handle_key) {
-        return;
-    }
 
     frappe.call({
         method: 'purchase_batch_assistant.api.get_item_batch_details',
@@ -138,6 +131,7 @@ function trigger_purchase_batch_assistant(frm, cdt, cdn, is_manual) {
                 return;
             }
 
+            if (window.__pba_active_dialog) return;
             show_unified_batch_dialog(frm, cdt, cdn, data, is_manual);
         }
     });
@@ -179,6 +173,10 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
     let initial_mrp = flt(row[field_map.mrp_field]) || '';
     let initial_expiry = row[field_map.expiry_field] || '';
     let initial_min_price = (field_map.min_price_field ? flt(row[field_map.min_price_field]) : '') || data.item?.minimum_selling_price || '';
+    let initial_min_percent = '';
+    if (initial_min_price && initial_rate && flt(initial_rate) > 0) {
+        initial_min_percent = (((flt(initial_min_price) - flt(initial_rate)) / flt(initial_rate)) * 100).toFixed(2);
+    }
     let initial_serials = (field_map.serial_field ? row[field_map.serial_field] : '') || row.serial_no || '';
 
     let dialog = new frappe.ui.Dialog({
@@ -196,7 +194,11 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
         },
         secondary_action_label: __('Cancel / Skip (Esc)'),
         secondary_action: function() {
-            row.__pba_handled_key = `${item_code}_${current_qty}`;
+            window.__pba_active_dialog = false;
+            if (row) {
+                row.__pba_handled_key = null;
+                row.__pba_applying = false;
+            }
             dialog.hide();
         }
     });
@@ -204,6 +206,12 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
     dialog.$wrapper.addClass('pba-dialog');
     dialog.on_hide = function() {
         window.__pba_active_dialog = false;
+        if (row) {
+            row.__pba_handled_key = null;
+            setTimeout(() => {
+                row.__pba_applying = false;
+            }, 300);
+        }
     };
 
     // Helper: convert MM-YY to last day YYYY-MM-DD
@@ -344,22 +352,28 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
                 </div>
             </div>
             <div class="row" style="margin-top: 6px;">
-                <div class="col-sm-4">
+                <div class="col-sm-3">
                     <div class="form-group" style="margin-bottom: 0;">
-                        <label class="control-label" style="font-weight: 600;">${__('Billing / Purchase Rate ({0})', [currency])} <span class="text-danger">*</span></label>
-                        <input type="number" step="0.01" id="pba_input_rate" class="form-control input-sm" value="${initial_rate}" placeholder="${__('Rate billed to us')}">
+                        <label class="control-label" style="font-weight: 600;">${__('Billing Rate ({0})', [currency])} <span class="text-danger">*</span></label>
+                        <input type="number" step="0.01" id="pba_input_rate" class="form-control input-sm" value="${initial_rate}" placeholder="${__('Billed Rate')}">
                     </div>
                 </div>
-                <div class="col-sm-4">
+                <div class="col-sm-3">
                     <div class="form-group" style="margin-bottom: 0;">
                         <label class="control-label" style="font-weight: 600;">${__('Batch MRP ({0})', [currency])} <span class="text-danger">*</span></label>
                         <input type="number" step="0.01" id="pba_input_mrp" class="form-control input-sm" value="${initial_mrp}" placeholder="${__('Maximum Retail Price')}">
                     </div>
                 </div>
-                <div class="col-sm-4">
+                <div class="col-sm-3">
                     <div class="form-group" style="margin-bottom: 0;">
-                        <label class="control-label" style="font-weight: 600;">${__('Minimum Selling Price ({0})', [currency])}</label>
-                        <input type="number" step="0.01" id="pba_input_min_price" class="form-control input-sm" value="${initial_min_price}" placeholder="${__('Optional floor price')}">
+                        <label class="control-label" style="font-weight: 600;">${__('Min Selling Price ({0})', [currency])}</label>
+                        <input type="number" step="0.01" id="pba_input_min_price" class="form-control input-sm" value="${initial_min_price}" placeholder="${__('Floor Price')}">
+                    </div>
+                </div>
+                <div class="col-sm-3">
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label class="control-label" style="font-weight: 600;">${__('Min Margin (%)')}</label>
+                        <input type="number" step="0.01" id="pba_input_min_percent" class="form-control input-sm" value="${initial_min_percent}" placeholder="${__('e.g. 20%')}">
                     </div>
                 </div>
             </div>
@@ -433,9 +447,48 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
     let $mrp_input = dialog.$wrapper.find('#pba_input_mrp');
     let $mmyy_input = dialog.$wrapper.find('#pba_input_expiry_mmyy');
     let $min_input = dialog.$wrapper.find('#pba_input_min_price');
+    let $min_percent_input = dialog.$wrapper.find('#pba_input_min_percent');
     let $expiry_feedback = dialog.$wrapper.find('#pba_expiry_feedback');
     let $serial_input = dialog.$wrapper.find('#pba_input_serial');
     let $serial_badge = dialog.$wrapper.find('#pba_serial_badge');
+
+    // Bidirectional calculations for Min Selling Price & Margin %
+    $min_input.on('input change', function() {
+        let rate = flt($rate_input.val());
+        let min_p = flt($min_input.val());
+        if (min_p > 0 && rate > 0) {
+            let pct = ((min_p - rate) / rate) * 100;
+            $min_percent_input.val(pct.toFixed(2));
+        } else if (!min_p) {
+            $min_percent_input.val('');
+        }
+    });
+
+    $min_percent_input.on('input change', function() {
+        let rate = flt($rate_input.val());
+        let pct_val = $min_percent_input.val().trim();
+        if (pct_val !== '' && rate > 0) {
+            let pct = flt(pct_val);
+            let min_p = rate * (1 + pct / 100);
+            $min_input.val(min_p.toFixed(2));
+        } else if (pct_val === '') {
+            $min_input.val('');
+        }
+    });
+
+    $rate_input.on('input', function() {
+        let rate = flt($rate_input.val());
+        let min_p = flt($min_input.val());
+        let pct_val = $min_percent_input.val().trim();
+        if (min_p > 0 && rate > 0) {
+            let pct = ((min_p - rate) / rate) * 100;
+            $min_percent_input.val(pct.toFixed(2));
+        } else if (pct_val !== '' && rate > 0) {
+            let pct = flt(pct_val);
+            let calculated_min_p = rate * (1 + pct / 100);
+            $min_input.val(calculated_min_p.toFixed(2));
+        }
+    });
 
     // Free items references
     let $free_container = dialog.$wrapper.find('#pba_free_container');
@@ -583,7 +636,16 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
             let y = d.getFullYear().toString().slice(-2);
             $mmyy_input.val(`${m < 10 ? '0' + m : m}-${y}`);
         }
-        if (b.minimum_selling_price > 0) $min_input.val(b.minimum_selling_price);
+        if (b.minimum_selling_price > 0) {
+            $min_input.val(b.minimum_selling_price);
+            let r_val = flt($rate_input.val());
+            if (r_val > 0) {
+                let pct = ((b.minimum_selling_price - r_val) / r_val) * 100;
+                $min_percent_input.val(pct.toFixed(2));
+            } else {
+                $min_percent_input.val('');
+            }
+        }
 
         validate_expiry_inputs();
         validate_rate_vs_mrp();
@@ -776,6 +838,9 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
         // 2. Batch Number
         if (batch_field && frappe.meta.has_field(cdt, batch_field)) {
             frappe.model.set_value(cdt, cdn, batch_field, batch_id);
+        }
+        if (frappe.meta.has_field(cdt, 'custom_batch_id_all')) {
+            frappe.model.set_value(cdt, cdn, 'custom_batch_id_all', batch_id);
         }
         
         let is_existing_batch = batches.some(b => b.batch_id === batch_id || b.name === batch_id);

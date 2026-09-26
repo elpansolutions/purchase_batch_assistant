@@ -248,7 +248,7 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
         <div class="pba-header-cards">
             <div class="pba-card">
                 <div class="pba-card-label">${__('Item')}</div>
-                <div class="pba-card-val" style="font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${frappe.utils.escape_html(item_name)}">
+                <div class="pba-card-val" style="font-size: 13px; word-break: break-word; white-space: normal; line-height: 1.35;" title="${frappe.utils.escape_html(item_name)}">
                     ${frappe.utils.escape_html(item_name)}
                 </div>
             </div>
@@ -337,30 +337,24 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
     content_html += `
         <div class="pba-form-box">
             <div class="pba-form-box-title">
-                <span><i class="fa fa-edit text-primary"></i> ${__('Item, Quantity & Pricing Details')}</span>
+                <span><i class="fa fa-edit text-primary"></i> ${__('Batch & Rate Details')}</span>
                 <span style="font-size: 11px; font-weight: normal; color: #64748b; text-transform: none;">
                     ${__('Select an existing batch above or enter details directly')}
                 </span>
             </div>
             <div class="row">
-                <div class="col-sm-4">
-                    <div class="form-group">
-                        <label class="control-label" style="font-weight: 600;">${__('Quantity ({0})', [stock_uom])} <span class="text-danger">*</span></label>
-                        <input type="number" step="any" min="0.001" id="pba_input_qty" class="form-control input-sm" value="${current_qty}" placeholder="${__('Quantity')}">
-                    </div>
-                </div>
-                <div class="col-sm-4">
+                <div class="col-sm-6">
                     <div class="form-group">
                         <label class="control-label" style="font-weight: 600;">${__('Batch Number')} <span class="text-danger">*</span></label>
                         <input type="text" id="pba_input_batch_id" class="form-control input-sm" value="${frappe.utils.escape_html(initial_batch)}" placeholder="${__('e.g. B-2026-001')}">
                     </div>
                 </div>
-                <div class="col-sm-4">
+                <div class="col-sm-6">
                     <div class="form-group">
-                        <label class="control-label" style="font-weight: 600;">${__('Expiry Date (MM-YY)')} <span class="text-muted" style="font-size: 11px; font-weight: normal;">(${__('Optional')})</span></label>
+                        <label class="control-label" style="font-weight: 600;">${__('Expiry Date (MM-YY)')}</label>
                         <input type="text" id="pba_input_expiry_mmyy" class="form-control input-sm" value="${frappe.utils.escape_html(initial_expiry)}" placeholder="MM-YY (e.g. 08-27)" maxlength="5">
                         <div id="pba_expiry_feedback" style="font-size: 11px; margin-top: 3px; color: #64748b;">
-                            ${__('Optional — MM-YY format (e.g. 08-27)')}
+                            ${__('MM-YY format (e.g. 08-27)')}
                         </div>
                     </div>
                 </div>
@@ -374,8 +368,8 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
                 </div>
                 <div class="col-sm-3">
                     <div class="form-group" style="margin-bottom: 0;">
-                        <label class="control-label" style="font-weight: 600;">${__('Batch MRP ({0})', [currency])} <span class="text-muted" style="font-size: 11px; font-weight: normal;">(${__('Optional')})</span></label>
-                        <input type="number" step="0.01" id="pba_input_mrp" class="form-control input-sm" value="${initial_mrp}" placeholder="${__('e.g. 150.00 (Optional)')}">
+                        <label class="control-label" style="font-weight: 600;">${__('Batch MRP ({0})', [currency])}</label>
+                        <input type="number" step="0.01" id="pba_input_mrp" class="form-control input-sm" value="${initial_mrp}" placeholder="${__('e.g. 150.00')}">
                     </div>
                 </div>
                 <div class="col-sm-3">
@@ -456,8 +450,6 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
     dialog.fields_dict.main_html.$wrapper.html(content_html);
 
     // Form inputs references
-    let $qty_input = dialog.$wrapper.find('#pba_input_qty');
-    let $card_qty_val = dialog.$wrapper.find('#pba_card_qty_val');
     let $batch_input = dialog.$wrapper.find('#pba_input_batch_id');
     let $rate_input = dialog.$wrapper.find('#pba_input_rate');
     let $mrp_input = dialog.$wrapper.find('#pba_input_mrp');
@@ -480,14 +472,12 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
     // Live update of Free Scheme Breakdown
     function update_free_summary() {
         let is_checked = $free_check.is(':checked');
-        let q_val = flt($qty_input.val());
-        if (q_val <= 0) q_val = current_qty;
 
         if (!is_checked) {
             $free_container.addClass('is-inactive');
             $free_details.hide();
             $free_badge.hide();
-            $serial_total_qty.text(q_val);
+            $serial_total_qty.text(current_qty);
             update_serial_count();
             return;
         }
@@ -496,7 +486,7 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
         $free_details.show();
         $free_badge.show();
 
-        let billed_q = q_val;
+        let billed_q = current_qty;
         let free_q = flt($free_qty_input.val()) || 0;
         let rate = flt($rate_input.val()) || 0;
         let total_amount = billed_q * rate;
@@ -511,15 +501,6 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
         $serial_total_qty.text(billed_q + free_q);
         update_serial_count();
     }
-
-    $qty_input.on('input change', function() {
-        let q = flt($qty_input.val());
-        if (q <= 0) q = 0;
-        current_qty = q;
-        $card_qty_val.text(q);
-        update_free_summary();
-        update_serial_count();
-    });
 
     // Bidirectional calculations for Min Selling Price & Margin %
     $min_input.on('input change', function() {
@@ -568,7 +549,7 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
     function validate_expiry_inputs() {
         let mmyy = $mmyy_input.val().trim();
         if (!mmyy) {
-            $expiry_feedback.html(`<span style="color: #64748b;">${__('Optional — MM-YY format (e.g. 08-27)')}</span>`);
+            $expiry_feedback.html(`<span style="color: #64748b;">${__('MM-YY format (e.g. 08-27)')}</span>`);
             return true;
         }
 
@@ -688,9 +669,7 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
     // Serial counter logic
     function update_serial_count() {
         let is_checked = $free_check.is(':checked');
-        let q_val = flt($qty_input.val());
-        if (q_val <= 0) q_val = current_qty;
-        let total_units = q_val + (is_checked ? (flt($free_qty_input.val()) || 0) : 0);
+        let total_units = current_qty + (is_checked ? (flt($free_qty_input.val()) || 0) : 0);
         let raw = $serial_input.val().trim();
         let count = 0;
         if (raw) {
@@ -715,9 +694,7 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
     // Auto generator handler
     dialog.$wrapper.find('#pba_btn_gen').on('click', function() {
         let is_checked = $free_check.is(':checked');
-        let q_val = flt($qty_input.val());
-        if (q_val <= 0) q_val = current_qty;
-        let total_units = q_val + (is_checked ? (flt($free_qty_input.val()) || 0) : 0);
+        let total_units = current_qty + (is_checked ? (flt($free_qty_input.val()) || 0) : 0);
         let prefix = dialog.$wrapper.find('#pba_gen_prefix').val().trim();
         let start_num = cint(dialog.$wrapper.find('#pba_gen_start').val());
         if (start_num <= 0) start_num = 1;
@@ -742,14 +719,7 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
     function apply_to_row() {
         row.__pba_applying = true;
 
-        let billed_qty = flt($qty_input.val());
-        if (billed_qty <= 0) {
-            frappe.msgprint(__('Please specify a valid Quantity greater than 0.'));
-            $qty_input.focus();
-            row.__pba_applying = false;
-            return;
-        }
-
+        let billed_qty = current_qty;
         let batch_id = $batch_input.val().trim();
         let rate_val = flt($rate_input.val());
         let mrp = flt($mrp_input.val());

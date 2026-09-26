@@ -68,6 +68,12 @@ frappe.ui.form.on('Purchase Invoice Item', {
         let row = locals[cdt]?.[cdn];
         if (!row || !row.item_code || row.is_free_item || row.__pba_applying || window.__pba_active_dialog) return;
 
+        let free_qty = flt(row.custom_free_qty) || 0;
+        let billed_q = flt(row.qty) > free_qty ? (flt(row.qty) - free_qty) : flt(row.qty);
+        if (frappe.meta.has_field(cdt, 'custom_billed_qty')) {
+            row.custom_billed_qty = billed_q;
+        }
+
         // Reset handled key when user enters or modifies qty
         row.__pba_handled_key = null;
 
@@ -76,7 +82,7 @@ frappe.ui.form.on('Purchase Invoice Item', {
             row.__pba_qty_timer = setTimeout(() => {
                 if (row.__pba_applying || window.__pba_active_dialog) return;
                 trigger_purchase_batch_assistant(frm, cdt, cdn, true);
-            }, 300);
+            }, 400);
         }
     },
 
@@ -144,7 +150,6 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
     window.__pba_active_dialog = true;
 
     let currency = frm.doc.currency || '₹';
-    let current_qty = flt(row.qty) || 1.0;
     let item_code = row.item_code;
     let item_name = data.item?.item_name || item_code;
     let stock_uom = data.item?.stock_uom || row.uom || 'Nos';
@@ -164,10 +169,13 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
     }
     let is_free_initially_checked = initial_free_qty > 0;
 
-    // Billed Quantity (excluding free units)
-    let initial_billed_qty = flt(row[field_map.billed_qty_field || 'custom_billed_qty']) || (initial_free_qty > 0 ? (flt(row.qty) - initial_free_qty) : flt(row.qty)) || 1.0;
+    // Billed Quantity: prioritize row.qty so user changes on grid are immediately respected
+    let row_qty = flt(row.qty);
+    let initial_billed_qty = row_qty > 0 
+        ? (initial_free_qty > 0 && row_qty > initial_free_qty ? (row_qty - initial_free_qty) : row_qty) 
+        : (flt(row[field_map.billed_qty_field || 'custom_billed_qty']) || 1.0);
     if (initial_billed_qty <= 0) initial_billed_qty = 1.0;
-    current_qty = initial_billed_qty;
+    let current_qty = initial_billed_qty;
 
     let initial_rate = flt(row[field_map.billed_rate_field || 'custom_billed_rate']) || (field_map.rate_field && flt(row[field_map.rate_field])) || flt(row.rate) || flt(row.price_list_rate) || flt(data.item?.last_purchase_rate) || flt(data.item?.standard_rate) || '';
     let initial_mrp = flt(row[field_map.mrp_field]) || '';
@@ -246,7 +254,7 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
             </div>
             <div class="pba-card">
                 <div class="pba-card-label">${__('Invoice Billed Qty')}</div>
-                <div class="pba-card-val text-primary">${current_qty} <span style="font-size: 11px; font-weight: normal; color: #64748b;">${stock_uom}</span></div>
+                <div class="pba-card-val text-primary"><span id="pba_card_qty_val">${current_qty}</span> <span style="font-size: 11px; font-weight: normal; color: #64748b;">${stock_uom}</span></div>
             </div>
             <div class="pba-card">
                 <div class="pba-card-label">${__('System Date')}</div>
@@ -329,24 +337,30 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
     content_html += `
         <div class="pba-form-box">
             <div class="pba-form-box-title">
-                <span><i class="fa fa-edit text-primary"></i> ${__('Batch & Rate Details to Populate')}</span>
+                <span><i class="fa fa-edit text-primary"></i> ${__('Item, Quantity & Pricing Details')}</span>
                 <span style="font-size: 11px; font-weight: normal; color: #64748b; text-transform: none;">
-                    ${__('Select an existing batch above or type new details directly')}
+                    ${__('Select an existing batch above or enter details directly')}
                 </span>
             </div>
             <div class="row">
-                <div class="col-sm-6">
+                <div class="col-sm-4">
                     <div class="form-group">
-                        <label class="control-label" style="font-weight: 600;">${__('Batch Number')} <span class="text-danger">*</span></label>
-                        <input type="text" id="pba_input_batch_id" class="form-control input-sm" value="${frappe.utils.escape_html(initial_batch)}" placeholder="${__('e.g. B-2026-001')}">
+                        <label class="control-label" style="font-weight: 600;">${__('Quantity ({0})', [stock_uom])} <span class="text-danger">*</span></label>
+                        <input type="number" step="any" min="0.001" id="pba_input_qty" class="form-control input-sm" value="${current_qty}" placeholder="${__('Quantity')}">
                     </div>
                 </div>
-                <div class="col-sm-6">
+                <div class="col-sm-4">
                     <div class="form-group">
-                        <label class="control-label" style="font-weight: 600;">${__('Expiry Date (MM-YY)')} <span class="text-danger">*</span></label>
+                        <label class="control-label" style="font-weight: 600;">${__('Batch Number')} <span class="text-muted" style="font-size: 11px; font-weight: normal;">(${__('Optional')})</span></label>
+                        <input type="text" id="pba_input_batch_id" class="form-control input-sm" value="${frappe.utils.escape_html(initial_batch)}" placeholder="${__('e.g. B-2026-001 (Optional)')}">
+                    </div>
+                </div>
+                <div class="col-sm-4">
+                    <div class="form-group">
+                        <label class="control-label" style="font-weight: 600;">${__('Expiry Date (MM-YY)')} <span class="text-muted" style="font-size: 11px; font-weight: normal;">(${__('Optional')})</span></label>
                         <input type="text" id="pba_input_expiry_mmyy" class="form-control input-sm" value="${frappe.utils.escape_html(initial_expiry)}" placeholder="MM-YY (e.g. 08-27)" maxlength="5">
                         <div id="pba_expiry_feedback" style="font-size: 11px; margin-top: 3px; color: #64748b;">
-                            ${__('Must not be an expired date in the past')}
+                            ${__('Optional — MM-YY format (e.g. 08-27)')}
                         </div>
                     </div>
                 </div>
@@ -354,14 +368,14 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
             <div class="row" style="margin-top: 6px;">
                 <div class="col-sm-3">
                     <div class="form-group" style="margin-bottom: 0;">
-                        <label class="control-label" style="font-weight: 600;">${__('Billing Rate ({0})', [currency])} <span class="text-danger">*</span></label>
+                        <label class="control-label" style="font-weight: 600;">${__('Billing Rate ({0})', [currency])}</label>
                         <input type="number" step="0.01" id="pba_input_rate" class="form-control input-sm" value="${initial_rate}" placeholder="${__('Billed Rate')}">
                     </div>
                 </div>
                 <div class="col-sm-3">
                     <div class="form-group" style="margin-bottom: 0;">
-                        <label class="control-label" style="font-weight: 600;">${__('Batch MRP ({0})', [currency])} <span class="text-danger">*</span></label>
-                        <input type="number" step="0.01" id="pba_input_mrp" class="form-control input-sm" value="${initial_mrp}" placeholder="${__('Maximum Retail Price')}">
+                        <label class="control-label" style="font-weight: 600;">${__('Batch MRP ({0})', [currency])} <span class="text-muted" style="font-size: 11px; font-weight: normal;">(${__('Optional')})</span></label>
+                        <input type="number" step="0.01" id="pba_input_mrp" class="form-control input-sm" value="${initial_mrp}" placeholder="${__('e.g. 150.00 (Optional)')}">
                     </div>
                 </div>
                 <div class="col-sm-3">
@@ -442,6 +456,8 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
     dialog.fields_dict.main_html.$wrapper.html(content_html);
 
     // Form inputs references
+    let $qty_input = dialog.$wrapper.find('#pba_input_qty');
+    let $card_qty_val = dialog.$wrapper.find('#pba_card_qty_val');
     let $batch_input = dialog.$wrapper.find('#pba_input_batch_id');
     let $rate_input = dialog.$wrapper.find('#pba_input_rate');
     let $mrp_input = dialog.$wrapper.find('#pba_input_mrp');
@@ -451,6 +467,59 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
     let $expiry_feedback = dialog.$wrapper.find('#pba_expiry_feedback');
     let $serial_input = dialog.$wrapper.find('#pba_input_serial');
     let $serial_badge = dialog.$wrapper.find('#pba_serial_badge');
+
+    // Free items references
+    let $free_container = dialog.$wrapper.find('#pba_free_container');
+    let $free_check = dialog.$wrapper.find('#pba_check_free_item');
+    let $free_details = dialog.$wrapper.find('#pba_free_details_row');
+    let $free_badge = dialog.$wrapper.find('#pba_free_scheme_badge');
+    let $free_qty_input = dialog.$wrapper.find('#pba_input_free_qty');
+    let $free_summary = dialog.$wrapper.find('#pba_free_summary');
+    let $serial_total_qty = dialog.$wrapper.find('#pba_serial_total_qty');
+
+    // Live update of Free Scheme Breakdown
+    function update_free_summary() {
+        let is_checked = $free_check.is(':checked');
+        let q_val = flt($qty_input.val());
+        if (q_val <= 0) q_val = current_qty;
+
+        if (!is_checked) {
+            $free_container.addClass('is-inactive');
+            $free_details.hide();
+            $free_badge.hide();
+            $serial_total_qty.text(q_val);
+            update_serial_count();
+            return;
+        }
+
+        $free_container.removeClass('is-inactive');
+        $free_details.show();
+        $free_badge.show();
+
+        let billed_q = q_val;
+        let free_q = flt($free_qty_input.val()) || 0;
+        let rate = flt($rate_input.val()) || 0;
+        let total_amount = billed_q * rate;
+
+        let summary_html = `
+            <strong>${__('Free Scheme Breakdown:')}</strong><br>
+            • ${__('Accepted / Billed Qty:')} <strong>${billed_q} ${stock_uom}</strong> @ ${currency} ${format_currency(rate, currency)} = <strong>${currency} ${format_currency(total_amount, currency)}</strong><br>
+            • ${__('Free Quantity Column:')} <strong>+${free_q} Free</strong> (Tracked in Free Qty column, standard rate & amount preserved)<br>
+            • <strong>${__('GST & Financials:')}</strong> Tax calculated cleanly on invoice amount <strong>${currency} ${format_currency(total_amount, currency)}</strong> (No rate averaging)
+        `;
+        $free_summary.html(summary_html);
+        $serial_total_qty.text(billed_q + free_q);
+        update_serial_count();
+    }
+
+    $qty_input.on('input change', function() {
+        let q = flt($qty_input.val());
+        if (q <= 0) q = 0;
+        current_qty = q;
+        $card_qty_val.text(q);
+        update_free_summary();
+        update_serial_count();
+    });
 
     // Bidirectional calculations for Min Selling Price & Margin %
     $min_input.on('input change', function() {
@@ -490,57 +559,16 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
         }
     });
 
-    // Free items references
-    let $free_container = dialog.$wrapper.find('#pba_free_container');
-    let $free_check = dialog.$wrapper.find('#pba_check_free_item');
-    let $free_details = dialog.$wrapper.find('#pba_free_details_row');
-    let $free_badge = dialog.$wrapper.find('#pba_free_scheme_badge');
-    let $free_qty_input = dialog.$wrapper.find('#pba_input_free_qty');
-    let $free_summary = dialog.$wrapper.find('#pba_free_summary');
-    let $serial_total_qty = dialog.$wrapper.find('#pba_serial_total_qty');
-
-    // Live update of Free Scheme Breakdown
-    function update_free_summary() {
-        let is_checked = $free_check.is(':checked');
-        if (!is_checked) {
-            $free_container.addClass('is-inactive');
-            $free_details.hide();
-            $free_badge.hide();
-            $serial_total_qty.text(current_qty);
-            update_serial_count();
-            return;
-        }
-
-        $free_container.removeClass('is-inactive');
-        $free_details.show();
-        $free_badge.show();
-
-        let billed_q = current_qty;
-        let free_q = flt($free_qty_input.val()) || 0;
-        let rate = flt($rate_input.val()) || 0;
-        let total_amount = billed_q * rate;
-
-        let summary_html = `
-            <strong>${__('Free Scheme Breakdown:')}</strong><br>
-            • ${__('Accepted / Billed Qty:')} <strong>${billed_q} ${stock_uom}</strong> @ ${currency} ${format_currency(rate, currency)} = <strong>${currency} ${format_currency(total_amount, currency)}</strong><br>
-            • ${__('Free Quantity Column:')} <strong>+${free_q} Free</strong> (Tracked in Free Qty column, standard rate & amount preserved)<br>
-            • <strong>${__('GST & Financials:')}</strong> Tax calculated cleanly on invoice amount <strong>${currency} ${format_currency(total_amount, currency)}</strong> (No rate averaging)
-        `;
-        $free_summary.html(summary_html);
-        $serial_total_qty.text(billed_q + free_q);
-        update_serial_count();
-    }
-
     $free_check.on('change', update_free_summary);
     $free_qty_input.on('input', update_free_summary);
     $rate_input.on('input', update_free_summary);
     update_free_summary();
 
-    // Expiry validation function: ensures NOT expired in the past
+    // Expiry validation function: ensures NOT expired in the past if provided
     function validate_expiry_inputs() {
         let mmyy = $mmyy_input.val().trim();
         if (!mmyy) {
-            $expiry_feedback.html(`<span style="color: #64748b;">${__('Enter in MM-YY format (e.g. 08-27)')}</span>`);
+            $expiry_feedback.html(`<span style="color: #64748b;">${__('Optional — MM-YY format (e.g. 08-27)')}</span>`);
             return true;
         }
 
@@ -559,19 +587,19 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
         return true;
     }
 
-    // Rate vs MRP validation: Rate must strictly be less than MRP (< MRP, not >=)
+    // Rate vs MRP validation: Rate must strictly be less than MRP when MRP is present (< MRP, not >=)
     function validate_rate_vs_mrp() {
         let r = flt($rate_input.val());
         let m = flt($mrp_input.val());
         let $feedback = dialog.$wrapper.find('#pba_rate_mrp_feedback');
 
-        if ($rate_input.val().trim() !== '' && $mrp_input.val().trim() !== '') {
-            if (m > 0 && r >= m) {
+        if (m > 0 && r > 0) {
+            if (r >= m) {
                 $feedback.show().html(`<span class="text-danger" style="font-weight: 600;"><i class="fa fa-warning"></i> ${__('Billing Rate ({0} {1}) must be strictly less than Batch MRP ({0} {2}). Equal or higher rate is not allowed.', [currency, format_currency(r, currency), format_currency(m, currency)])}</span>`);
                 $rate_input.addClass('pba-input-error');
                 $mrp_input.addClass('pba-input-error');
                 return false;
-            } else if (m > 0 && r > 0) {
+            } else {
                 let margin_pct = (((m - r) / m) * 100).toFixed(1);
                 $feedback.show().html(`<span class="text-success"><i class="fa fa-check"></i> ${__('Valid Rate: Margin is {0}% below MRP.', [margin_pct])}</span>`);
                 $rate_input.removeClass('pba-input-error');
@@ -660,7 +688,9 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
     // Serial counter logic
     function update_serial_count() {
         let is_checked = $free_check.is(':checked');
-        let total_units = current_qty + (is_checked ? (flt($free_qty_input.val()) || 0) : 0);
+        let q_val = flt($qty_input.val());
+        if (q_val <= 0) q_val = current_qty;
+        let total_units = q_val + (is_checked ? (flt($free_qty_input.val()) || 0) : 0);
         let raw = $serial_input.val().trim();
         let count = 0;
         if (raw) {
@@ -685,7 +715,9 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
     // Auto generator handler
     dialog.$wrapper.find('#pba_btn_gen').on('click', function() {
         let is_checked = $free_check.is(':checked');
-        let total_units = current_qty + (is_checked ? (flt($free_qty_input.val()) || 0) : 0);
+        let q_val = flt($qty_input.val());
+        if (q_val <= 0) q_val = current_qty;
+        let total_units = q_val + (is_checked ? (flt($free_qty_input.val()) || 0) : 0);
         let prefix = dialog.$wrapper.find('#pba_gen_prefix').val().trim();
         let start_num = cint(dialog.$wrapper.find('#pba_gen_start').val());
         if (start_num <= 0) start_num = 1;
@@ -710,18 +742,19 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
     function apply_to_row() {
         row.__pba_applying = true;
 
+        let billed_qty = flt($qty_input.val());
+        if (billed_qty <= 0) {
+            frappe.msgprint(__('Please specify a valid Quantity greater than 0.'));
+            $qty_input.focus();
+            row.__pba_applying = false;
+            return;
+        }
+
         let batch_id = $batch_input.val().trim();
         let rate_val = flt($rate_input.val());
         let mrp = flt($mrp_input.val());
         let mmyy = $mmyy_input.val().trim();
         let min_price = flt($min_input.val());
-
-        if (!batch_id) {
-            frappe.msgprint(__('Batch Number is required.'));
-            $batch_input.focus();
-            row.__pba_applying = false;
-            return;
-        }
 
         if ($rate_input.val().trim() !== '' && rate_val < 0) {
             frappe.msgprint(__('Billing / Purchase Rate cannot be negative.'));
@@ -730,14 +763,7 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
             return;
         }
 
-        if (mrp <= 0) {
-            frappe.msgprint(__('Batch MRP must be greater than 0.'));
-            $mrp_input.focus();
-            row.__pba_applying = false;
-            return;
-        }
-
-        // Strict Validation: Billing Rate must always be strictly less than MRP (cannot be >= MRP)
+        // Rate vs MRP validation (only if MRP is specified and > 0)
         if (rate_val > 0 && mrp > 0 && rate_val >= mrp) {
             frappe.msgprint({
                 title: __('Rate Exceeds or Equals MRP'),
@@ -749,31 +775,27 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
             return;
         }
 
-        // Strict Expiry Validation: Cannot be empty, invalid, or expired in the past
-        if (!mmyy) {
-            frappe.msgprint(__('Expiry Date is required in MM-YY format (e.g. 08-27).'));
-            $mmyy_input.focus();
-            row.__pba_applying = false;
-            return;
-        }
+        // Expiry Date Validation (Optional, but if filled, must be valid MM-YY and not expired)
+        let calculated_date = null;
+        if (mmyy) {
+            if (!/^(0[1-9]|1[0-2])-\d{2}$/.test(mmyy)) {
+                frappe.msgprint(__('Expiry Date must be in valid MM-YY format (Example: 08-27) or leave blank if not applicable.'));
+                $mmyy_input.focus();
+                row.__pba_applying = false;
+                return;
+            }
 
-        if (!/^(0[1-9]|1[0-2])-\d{2}$/.test(mmyy)) {
-            frappe.msgprint(__('Expiry Date must be in valid MM-YY format (Example: 08-27).'));
-            $mmyy_input.focus();
-            row.__pba_applying = false;
-            return;
-        }
-
-        let calculated_date = mmyy_to_date_str(mmyy);
-        if (is_date_expired(calculated_date)) {
-            frappe.msgprint({
-                title: __('Expired Date Not Allowed'),
-                indicator: 'red',
-                message: __('The Expiry Date ({0}) is already expired or in the past.<br><strong>Purchases cannot accept expired products.</strong> Please enter a future expiry date.', [mmyy])
-            });
-            $mmyy_input.focus();
-            row.__pba_applying = false;
-            return;
+            calculated_date = mmyy_to_date_str(mmyy);
+            if (is_date_expired(calculated_date)) {
+                frappe.msgprint({
+                    title: __('Expired Date Not Allowed'),
+                    indicator: 'red',
+                    message: __('The Expiry Date ({0}) is already expired or in the past.<br><strong>Purchases cannot accept expired products.</strong> Please enter a future expiry date.', [mmyy])
+                });
+                $mmyy_input.focus();
+                row.__pba_applying = false;
+                return;
+            }
         }
 
         let is_free_checked = $free_check.is(':checked');
@@ -785,7 +807,6 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
             return;
         }
 
-        let billed_qty = current_qty;
         let total_stock_units = is_free_checked ? (billed_qty + free_qty) : billed_qty;
 
         // Serial Number Handling
@@ -835,23 +856,35 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
         // Keep row accepted / billed quantity as exact entered qty (e.g. 20)
         frappe.model.set_value(cdt, cdn, 'qty', billed_qty);
 
-        // 2. Batch Number
-        if (batch_field && frappe.meta.has_field(cdt, batch_field)) {
-            frappe.model.set_value(cdt, cdn, batch_field, batch_id);
-        }
-        if (frappe.meta.has_field(cdt, 'custom_batch_id_all')) {
-            frappe.model.set_value(cdt, cdn, 'custom_batch_id_all', batch_id);
-        }
-        
-        let is_existing_batch = batches.some(b => b.batch_id === batch_id || b.name === batch_id);
-        let matched_batch_name = is_existing_batch ? batches.find(b => b.batch_id === batch_id || b.name === batch_id)?.name : null;
-
-        if (is_existing_batch) {
-            if (frappe.meta.has_field(cdt, 'batch_no')) {
-                frappe.model.set_value(cdt, cdn, 'batch_no', matched_batch_name || batch_id);
+        // 2. Batch Number (Optional)
+        if (batch_id) {
+            if (batch_field && frappe.meta.has_field(cdt, batch_field)) {
+                frappe.model.set_value(cdt, cdn, batch_field, batch_id);
             }
-        } else if (batch_field === 'batch_no') {
-            frappe.model.set_value(cdt, cdn, 'batch_no', batch_id);
+            if (frappe.meta.has_field(cdt, 'custom_batch_id_all')) {
+                frappe.model.set_value(cdt, cdn, 'custom_batch_id_all', batch_id);
+            }
+            
+            let is_existing_batch = batches.some(b => b.batch_id === batch_id || b.name === batch_id);
+            let matched_batch_name = is_existing_batch ? batches.find(b => b.batch_id === batch_id || b.name === batch_id)?.name : null;
+
+            if (is_existing_batch) {
+                if (frappe.meta.has_field(cdt, 'batch_no')) {
+                    frappe.model.set_value(cdt, cdn, 'batch_no', matched_batch_name || batch_id);
+                }
+            } else if (batch_field === 'batch_no') {
+                frappe.model.set_value(cdt, cdn, 'batch_no', batch_id);
+            }
+        } else {
+            if (batch_field && frappe.meta.has_field(cdt, batch_field)) {
+                frappe.model.set_value(cdt, cdn, batch_field, '');
+            }
+            if (frappe.meta.has_field(cdt, 'batch_no')) {
+                frappe.model.set_value(cdt, cdn, 'batch_no', '');
+            }
+            if (frappe.meta.has_field(cdt, 'custom_batch_id_all')) {
+                frappe.model.set_value(cdt, cdn, 'custom_batch_id_all', '');
+            }
         }
 
         // 3. Billing / Purchase Rate (exact entered purchase rate, NO rate averaging)
@@ -862,20 +895,24 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
             }
         }
 
-        // 4. MRP
+        // 4. MRP (Optional)
         if (mrp_field && frappe.meta.has_field(cdt, mrp_field)) {
-            frappe.model.set_value(cdt, cdn, mrp_field, mrp);
+            frappe.model.set_value(cdt, cdn, mrp_field, mrp > 0 ? mrp : 0);
         }
 
-        // 5. Expiry Date (MM-YY if Data field, or YYYY-MM-DD if Date field)
-        let expiry_val = (expiry_type === 'Date') ? calculated_date : mmyy;
+        // 5. Expiry Date (Optional - MM-YY if Data field, or YYYY-MM-DD if Date field)
         if (expiry_field && frappe.meta.has_field(cdt, expiry_field)) {
-            frappe.model.set_value(cdt, cdn, expiry_field, expiry_val);
+            if (mmyy) {
+                let expiry_val = (expiry_type === 'Date') ? calculated_date : mmyy;
+                frappe.model.set_value(cdt, cdn, expiry_field, expiry_val);
+            } else {
+                frappe.model.set_value(cdt, cdn, expiry_field, '');
+            }
         }
 
         // 6. Minimum Selling Price
-        if (min_field && frappe.meta.has_field(cdt, min_field) && min_price > 0) {
-            frappe.model.set_value(cdt, cdn, min_field, min_price);
+        if (min_field && frappe.meta.has_field(cdt, min_field)) {
+            frappe.model.set_value(cdt, cdn, min_field, min_price > 0 ? min_price : 0);
         }
 
         // 7. Serial Numbers
@@ -889,12 +926,12 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
         }
 
         // ERPNext v16 inline serial/batch flag
-        if (frappe.meta.has_field(cdt, 'use_serial_batch_fields')) {
+        if (frappe.meta.has_field(cdt, 'use_serial_batch_fields') && (batch_id || serials_formatted)) {
             frappe.model.set_value(cdt, cdn, 'use_serial_batch_fields', 1);
         }
 
         // 8. Clean up any legacy companion free rows so only 1 row exists
-        let companion_row = (frm.doc.items || []).find(r => r.is_free_item && (r.__pba_parent_cdn === cdn || (r.item_code === item_code && r[batch_field] === batch_id)));
+        let companion_row = (frm.doc.items || []).find(r => r.is_free_item && (r.__pba_parent_cdn === cdn || (r.item_code === item_code && batch_id && r[batch_field] === batch_id)));
         if (companion_row) {
             frappe.model.clear_doc(companion_row.doctype, companion_row.name);
             frm.doc.items = (frm.doc.items || []).filter(r => r.name !== companion_row.name);
@@ -905,18 +942,25 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
             frm.refresh_field('items');
         }
 
-        let alert_parts = [];
+        let alert_parts = [`Qty: ${billed_qty}`];
+        if (batch_id) {
+            alert_parts.push(`Batch: ${batch_id}`);
+        }
         if (rate_val > 0) {
             alert_parts.push(`Rate: ${currency} ${format_currency(rate_val, currency)}`);
         }
-        alert_parts.push(`MRP: ${currency} ${format_currency(mrp, currency)}`);
-        alert_parts.push(`Exp: ${mmyy}`);
+        if (mrp > 0) {
+            alert_parts.push(`MRP: ${currency} ${format_currency(mrp, currency)}`);
+        }
+        if (mmyy) {
+            alert_parts.push(`Exp: ${mmyy}`);
+        }
         if (is_free_checked && free_qty > 0) {
             alert_parts.push(`+${free_qty} Free`);
         }
 
         frappe.show_alert({
-            message: __('Row {0}: Applied Batch <b>{1}</b> ({2})', [row.idx || 1, batch_id, alert_parts.join(', ')]),
+            message: __('Row {0}: Updated ({1})', [row.idx || 1, alert_parts.join(', ')]),
             indicator: 'green'
         }, 3);
 

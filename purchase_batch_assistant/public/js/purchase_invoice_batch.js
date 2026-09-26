@@ -351,8 +351,8 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
                 </div>
                 <div class="col-sm-4">
                     <div class="form-group">
-                        <label class="control-label" style="font-weight: 600;">${__('Batch Number')} <span class="text-muted" style="font-size: 11px; font-weight: normal;">(${__('Optional')})</span></label>
-                        <input type="text" id="pba_input_batch_id" class="form-control input-sm" value="${frappe.utils.escape_html(initial_batch)}" placeholder="${__('e.g. B-2026-001 (Optional)')}">
+                        <label class="control-label" style="font-weight: 600;">${__('Batch Number')} <span class="text-danger">*</span></label>
+                        <input type="text" id="pba_input_batch_id" class="form-control input-sm" value="${frappe.utils.escape_html(initial_batch)}" placeholder="${__('e.g. B-2026-001')}">
                     </div>
                 </div>
                 <div class="col-sm-4">
@@ -368,7 +368,7 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
             <div class="row" style="margin-top: 6px;">
                 <div class="col-sm-3">
                     <div class="form-group" style="margin-bottom: 0;">
-                        <label class="control-label" style="font-weight: 600;">${__('Billing Rate ({0})', [currency])}</label>
+                        <label class="control-label" style="font-weight: 600;">${__('Billing Rate ({0})', [currency])} <span class="text-danger">*</span></label>
                         <input type="number" step="0.01" id="pba_input_rate" class="form-control input-sm" value="${initial_rate}" placeholder="${__('Billed Rate')}">
                     </div>
                 </div>
@@ -755,6 +755,13 @@ function show_unified_batch_dialog(frm, cdt, cdn, data, is_manual) {
         let mrp = flt($mrp_input.val());
         let mmyy = $mmyy_input.val().trim();
         let min_price = flt($min_input.val());
+
+        if (!batch_id) {
+            frappe.msgprint(__('Batch Number is required.'));
+            $batch_input.focus();
+            row.__pba_applying = false;
+            return;
+        }
 
         if ($rate_input.val().trim() !== '' && rate_val < 0) {
             frappe.msgprint(__('Billing / Purchase Rate cannot be negative.'));

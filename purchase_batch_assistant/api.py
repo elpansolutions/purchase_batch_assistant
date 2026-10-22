@@ -2,16 +2,17 @@ import frappe
 from frappe import _
 from frappe.utils import getdate, format_date, flt, cint
 
-def get_field_mappings():
+def get_field_mappings(parent_doctype="Purchase Invoice"):
     """
-    Intelligently discover custom or standard field names in Purchase Invoice Item and Batch,
+    Intelligently discover custom or standard field names in Purchase Invoice / Receipt Item and Batch,
     allowing seamless compatibility across Dev and Prod environments.
     """
     settings = {}
     if frappe.db.exists("DocType", "Purchase Batch Settings"):
         settings = frappe.get_single("Purchase Batch Settings").as_dict() or {}
 
-    pii_meta = frappe.get_meta("Purchase Invoice Item")
+    child_dt = "Purchase Receipt Item" if parent_doctype == "Purchase Receipt" else "Purchase Invoice Item"
+    pii_meta = frappe.get_meta(child_dt)
     batch_meta = frappe.get_meta("Batch")
 
     def find_field(meta, candidates, override_key=None):
@@ -112,14 +113,14 @@ def format_date_to_mm_yy(date_val):
 
 
 @frappe.whitelist()
-def get_item_batch_details(item_code, company=None):
+def get_item_batch_details(item_code, company=None, parent_doctype=None):
     """
     Fetches comprehensive batch, serial, pricing, and schema metadata for item_code.
     """
     if not item_code:
         return {}
 
-    field_map = get_field_mappings()
+    field_map = get_field_mappings(parent_doctype=parent_doctype or "Purchase Invoice")
 
     # Fetch Item Master info
     item = frappe.get_cached_value(
@@ -379,7 +380,7 @@ def validate_purchase_invoice(doc, method=None):
     2. Overrides / creates / synchronizes Batch records (MRP, Expiry, batch_no) automatically.
     3. Overrides / synchronizes Item minimum selling price when provided.
     """
-    field_map = get_field_mappings()
+    field_map = get_field_mappings(parent_doctype=doc.doctype)
     mrp_field = field_map.get("mrp_field") or "custom_mrp"
     rate_field = field_map.get("rate_field") or "rate"
     batch_field = field_map.get("batch_field") or "custom_batch_number"
@@ -435,6 +436,8 @@ def validate_purchase_invoice(doc, method=None):
                 row.batch_no = existing_name
             else:
                 # Create brand new batch
+                if not frappe.db.get_value("Item", row.item_code, "has_batch_no"):
+                    frappe.db.set_value("Item", row.item_code, "has_batch_no", 1, update_modified=False)
                 new_b = frappe.new_doc("Batch")
                 new_b.batch_id = batch_number
                 new_b.item = row.item_code

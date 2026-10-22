@@ -1,33 +1,69 @@
 import frappe
 from frappe.custom.doctype.custom_field.custom_field import create_custom_fields
 
+ITEM_FIELDS = [
+    {
+        "fieldname": "custom_free_qty",
+        "label": "Free Qty",
+        "fieldtype": "Float",
+        "insert_after": "qty",
+        "in_list_view": 1,
+        "columns": 1,
+        "description": "Free / Scheme units received with this item line",
+    },
+    {
+        "fieldname": "custom_billed_qty",
+        "label": "Billed Qty",
+        "fieldtype": "Float",
+        "insert_after": "custom_free_qty",
+        "description": "Purchased / billed quantity excluding free units",
+    },
+    {
+        "fieldname": "custom_billed_rate",
+        "label": "Billed Rate",
+        "fieldtype": "Currency",
+        "insert_after": "rate",
+        "options": "Company:company:default_currency",
+        "description": "Original purchase rate before scheme / free unit adjustment",
+    },
+    {
+        "fieldname": "custom_batch_number",
+        "label": "Batch Number",
+        "fieldtype": "Data",
+        "insert_after": "batch_no",
+        "in_list_view": 1,
+        "description": "Target batch number for fast entry",
+    },
+    {
+        "fieldname": "custom_expiry_date",
+        "label": "Expiry Date",
+        "fieldtype": "Data",
+        "insert_after": "custom_batch_number",
+        "description": "Expiry date in MM-YY format",
+    },
+    {
+        "fieldname": "custom_mrp",
+        "label": "MRP",
+        "fieldtype": "Currency",
+        "insert_after": "custom_expiry_date",
+        "in_list_view": 1,
+        "description": "Maximum Retail Price for the batch",
+    },
+    {
+        "fieldname": "custom_minimum_selling_price",
+        "label": "Minimum Selling Price",
+        "fieldtype": "Currency",
+        "options": "Company:company:default_currency",
+        "insert_after": "custom_mrp",
+        "in_list_view": 1,
+        "columns": 1,
+        "description": "Minimum selling floor price for this product line",
+    },
+]
+
 CUSTOM_FIELDS = {
-    "Purchase Invoice Item": [
-        {
-            "fieldname": "custom_free_qty",
-            "label": "Free Qty",
-            "fieldtype": "Float",
-            "insert_after": "qty",
-            "in_list_view": 1,
-            "columns": 1,
-            "description": "Free / Scheme units received with this item line",
-        },
-        {
-            "fieldname": "custom_billed_qty",
-            "label": "Billed Qty",
-            "fieldtype": "Float",
-            "insert_after": "custom_free_qty",
-            "description": "Purchased / billed quantity excluding free units",
-        },
-        {
-            "fieldname": "custom_billed_rate",
-            "label": "Billed Rate",
-            "fieldtype": "Currency",
-            "insert_after": "rate",
-            "options": "Company:company:default_currency",
-            "description": "Original purchase rate before scheme / free unit adjustment",
-        },
-    ]
+    "Purchase Invoice Item": ITEM_FIELDS,
+    "Purchase Receipt Item": ITEM_FIELDS,
 }
 
 def setup_custom_fields():

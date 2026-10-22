@@ -2,31 +2,33 @@
 // Unified single-page modal for selecting existing batches or entering new ones,
 // with past-date expiry prevention, serial number support, free items/replacements, and delayed batch saving.
 
-frappe.ui.form.on('Purchase Invoice', {
-    refresh: function(frm) {
-        // Form level hooks
-    },
-    supplier: function(frm) {
-        setTimeout(() => auto_set_tax_category_from_address(frm), 800);
-    },
-    supplier_address: function(frm) {
-        setTimeout(() => auto_set_tax_category_from_address(frm), 200);
-    },
-    validate: function(frm) {
-        for (let row of (frm.doc.items || [])) {
-            if (!row.item_code) continue;
-            let rate = flt(row.rate);
-            let mrp = flt(row.custom_mrp || row.mrp);
-            if (!row.is_free_item && rate > 0 && mrp > 0 && rate >= mrp) {
-                frappe.validated = false;
-                frappe.throw({
-                    title: __('Rate Exceeds or Equals MRP'),
-                    message: __('Row #{0} ({1}): Billing / Purchase Rate (<b>{2}</b>) must be strictly less than Batch MRP (<b>{3}</b>). Rate cannot be equal to or greater than MRP.', [row.idx || '', row.item_code, rate, mrp])
-                });
-                return false;
+['Purchase Invoice', 'Purchase Receipt'].forEach(function(dt) {
+    frappe.ui.form.on(dt, {
+        refresh: function(frm) {
+            // Form level hooks
+        },
+        supplier: function(frm) {
+            setTimeout(() => auto_set_tax_category_from_address(frm), 800);
+        },
+        supplier_address: function(frm) {
+            setTimeout(() => auto_set_tax_category_from_address(frm), 200);
+        },
+        validate: function(frm) {
+            for (let row of (frm.doc.items || [])) {
+                if (!row.item_code) continue;
+                let rate = flt(row.rate);
+                let mrp = flt(row.custom_mrp || row.mrp);
+                if (!row.is_free_item && rate > 0 && mrp > 0 && rate >= mrp) {
+                    frappe.validated = false;
+                    frappe.throw({
+                        title: __('Rate Exceeds or Equals MRP'),
+                        message: __('Row #{0} ({1}): Billing / Purchase Rate (<b>{2}</b>) must be strictly less than Batch MRP (<b>{3}</b>). Rate cannot be equal to or greater than MRP.', [row.idx || '', row.item_code, rate, mrp])
+                    });
+                    return false;
+                }
             }
         }
-    }
+    });
 });
 
 async function auto_set_tax_category_from_address(frm) {
@@ -47,64 +49,66 @@ async function auto_set_tax_category_from_address(frm) {
 }
 
 
-frappe.ui.form.on('Purchase Invoice Item', {
-    item_code: function(frm, cdt, cdn) {
-        let row = locals[cdt]?.[cdn];
-        if (!row || !row.item_code || row.is_free_item || row.__pba_applying || window.__pba_active_dialog) return;
+['Purchase Invoice Item', 'Purchase Receipt Item'].forEach(function(item_dt) {
+    frappe.ui.form.on(item_dt, {
+        item_code: function(frm, cdt, cdn) {
+            let row = locals[cdt]?.[cdn];
+            if (!row || !row.item_code || row.is_free_item || row.__pba_applying || window.__pba_active_dialog) return;
 
-        row.__pba_handled_key = null;
+            row.__pba_handled_key = null;
 
-        // Trigger if quantity is already entered
-        if (flt(row.qty) > 0) {
-            clearTimeout(row.__pba_qty_timer);
-            row.__pba_qty_timer = setTimeout(() => {
-                if (row.__pba_applying || window.__pba_active_dialog) return;
-                trigger_purchase_batch_assistant(frm, cdt, cdn, false);
-            }, 300);
-        }
-    },
+            // Trigger if quantity is already entered
+            if (flt(row.qty) > 0) {
+                clearTimeout(row.__pba_qty_timer);
+                row.__pba_qty_timer = setTimeout(() => {
+                    if (row.__pba_applying || window.__pba_active_dialog) return;
+                    trigger_purchase_batch_assistant(frm, cdt, cdn, false);
+                }, 300);
+            }
+        },
 
-    qty: function(frm, cdt, cdn) {
-        let row = locals[cdt]?.[cdn];
-        if (!row || !row.item_code || row.is_free_item || row.__pba_applying || window.__pba_active_dialog) return;
+        qty: function(frm, cdt, cdn) {
+            let row = locals[cdt]?.[cdn];
+            if (!row || !row.item_code || row.is_free_item || row.__pba_applying || window.__pba_active_dialog) return;
 
-        let free_qty = flt(row.custom_free_qty) || 0;
-        let billed_q = flt(row.qty) > free_qty ? (flt(row.qty) - free_qty) : flt(row.qty);
-        if (frappe.meta.has_field(cdt, 'custom_billed_qty')) {
-            row.custom_billed_qty = billed_q;
-        }
+            let free_qty = flt(row.custom_free_qty) || 0;
+            let billed_q = flt(row.qty) > free_qty ? (flt(row.qty) - free_qty) : flt(row.qty);
+            if (frappe.meta.has_field(cdt, 'custom_billed_qty')) {
+                row.custom_billed_qty = billed_q;
+            }
 
-        // Reset handled key when user enters or modifies qty
-        row.__pba_handled_key = null;
+            // Reset handled key when user enters or modifies qty
+            row.__pba_handled_key = null;
 
-        if (flt(row.qty) > 0) {
-            clearTimeout(row.__pba_qty_timer);
-            row.__pba_qty_timer = setTimeout(() => {
-                if (row.__pba_applying || window.__pba_active_dialog) return;
-                trigger_purchase_batch_assistant(frm, cdt, cdn, true);
-            }, 400);
-        }
-    },
-
-    form_render: function(frm, cdt, cdn) {
-        let row = locals[cdt]?.[cdn];
-        if (!row) return;
-
-        if (frm.fields_dict.items && frm.fields_dict.items.grid && frm.fields_dict.items.grid.open_grid_row) {
-            let grid_row = frm.fields_dict.items.grid.open_grid_row;
-            if (grid_row && !grid_row.__pba_btn_added) {
-                grid_row.__pba_btn_added = true;
-                let btn = $(`<button class="btn btn-xs btn-default" style="margin-top: 6px; margin-bottom: 6px;">
-                    <i class="fa fa-barcode text-primary"></i> ${__('Select / Enter Batch & Serial')}
-                </button>`);
-                btn.on('click', function(e) {
-                    e.preventDefault();
+            if (flt(row.qty) > 0) {
+                clearTimeout(row.__pba_qty_timer);
+                row.__pba_qty_timer = setTimeout(() => {
+                    if (row.__pba_applying || window.__pba_active_dialog) return;
                     trigger_purchase_batch_assistant(frm, cdt, cdn, true);
-                });
-                grid_row.wrapper.find('.grid-row-header').append(btn);
+                }, 400);
+            }
+        },
+
+        form_render: function(frm, cdt, cdn) {
+            let row = locals[cdt]?.[cdn];
+            if (!row) return;
+
+            if (frm.fields_dict.items && frm.fields_dict.items.grid && frm.fields_dict.items.grid.open_grid_row) {
+                let grid_row = frm.fields_dict.items.grid.open_grid_row;
+                if (grid_row && !grid_row.__pba_btn_added) {
+                    grid_row.__pba_btn_added = true;
+                    let btn = $(`<button class="btn btn-xs btn-default" style="margin-top: 6px; margin-bottom: 6px;">
+                        <i class="fa fa-barcode text-primary"></i> ${__('Select / Enter Batch & Serial')}
+                    </button>`);
+                    btn.on('click', function(e) {
+                        e.preventDefault();
+                        trigger_purchase_batch_assistant(frm, cdt, cdn, true);
+                    });
+                    grid_row.wrapper.find('.grid-row-header').append(btn);
+                }
             }
         }
-    }
+    });
 });
 
 function trigger_purchase_batch_assistant(frm, cdt, cdn, is_manual) {
@@ -126,7 +130,8 @@ function trigger_purchase_batch_assistant(frm, cdt, cdn, is_manual) {
         method: 'purchase_batch_assistant.api.get_item_batch_details',
         args: {
             item_code: row.item_code,
-            company: frm.doc.company || null
+            company: frm.doc.company || null,
+            parent_doctype: frm.doc.doctype || 'Purchase Invoice'
         },
         freeze: false,
         callback: function(r) {

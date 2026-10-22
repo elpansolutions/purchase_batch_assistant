@@ -8,7 +8,8 @@ app_license = "mit"
 # Includes in <head>
 # ------------------
 doctype_js = {
-    "Purchase Invoice": "public/js/purchase_invoice_batch.js"
+    "Purchase Invoice": "public/js/purchase_invoice_batch.js",
+    "Purchase Receipt": "public/js/purchase_invoice_batch.js"
 }
 
 app_include_css = "/assets/purchase_batch_assistant/css/purchase_invoice_batch.css"
@@ -17,6 +18,9 @@ app_include_css = "/assets/purchase_batch_assistant/css/purchase_invoice_batch.c
 # ---------------
 doc_events = {
     "Purchase Invoice": {
+        "validate": "purchase_batch_assistant.api.validate_purchase_invoice"
+    },
+    "Purchase Receipt": {
         "validate": "purchase_batch_assistant.api.validate_purchase_invoice"
     }
 }

@@ -70,11 +70,10 @@ async function auto_set_tax_category_from_address(frm) {
             clearTimeout(row.__pba_qty_timer);
             row.__pba_qty_timer = setTimeout(() => {
                 if (row.__pba_applying || window.__pba_active_dialog) return;
-                if (flt(row.qty) <= 0) {
-                    frappe.model.set_value(cdt, cdn, 'qty', 1);
+                if (flt(row.qty) > 0) {
+                    trigger_purchase_batch_assistant(frm, cdt, cdn, false);
                 }
-                trigger_purchase_batch_assistant(frm, cdt, cdn, false);
-            }, 300);
+            }, 600);
         },
 
         qty: function(frm, cdt, cdn) {
@@ -95,7 +94,7 @@ async function auto_set_tax_category_from_address(frm) {
                 row.__pba_qty_timer = setTimeout(() => {
                     if (row.__pba_applying || window.__pba_active_dialog) return;
                     trigger_purchase_batch_assistant(frm, cdt, cdn, true);
-                }, 400);
+                }, 300);
             }
         },
 
@@ -127,8 +126,12 @@ function trigger_purchase_batch_assistant(frm, cdt, cdn, is_manual) {
 
     let qty = flt(row.qty);
     if (qty <= 0) {
-        qty = 1;
-        frappe.model.set_value(cdt, cdn, 'qty', 1);
+        if (is_manual) {
+            qty = 1;
+            frappe.model.set_value(cdt, cdn, 'qty', 1);
+        } else {
+            return;
+        }
     }
 
     // Avoid infinite loop if dialog already active

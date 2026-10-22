@@ -7,7 +7,7 @@ app_license = "mit"
 
 # Includes in <head>
 # ------------------
-app_include_js = "/assets/purchase_batch_assistant/js/purchase_invoice_batch.js?v=20261022_1"
+app_include_js = "/assets/purchase_batch_assistant/js/purchase_invoice_batch.js?v=20261022_3"
 app_include_css = "/assets/purchase_batch_assistant/css/purchase_invoice_batch.css"
 
 doctype_js = {

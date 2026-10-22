@@ -5,7 +5,17 @@
 ['Purchase Invoice', 'Purchase Receipt'].forEach(function(dt) {
     frappe.ui.form.on(dt, {
         refresh: function(frm) {
-            // Form level hooks
+            if (frm.doc.docstatus === 0 && frm.fields_dict.items && frm.fields_dict.items.grid) {
+                frm.fields_dict.items.grid.add_custom_button(__('Batch & Serial Assistant'), function() {
+                    let selected = frm.fields_dict.items.grid.get_selected_children();
+                    let target_row = (selected && selected.length > 0) ? selected[0] : (frm.doc.items && frm.doc.items.length > 0 ? frm.doc.items[frm.doc.items.length - 1] : null);
+                    if (target_row && target_row.item_code) {
+                        trigger_purchase_batch_assistant(frm, target_row.doctype, target_row.name, true);
+                    } else {
+                        frappe.msgprint(__('Please select an item row or add an item first.'));
+                    }
+                });
+            }
         },
         supplier: function(frm) {
             setTimeout(() => auto_set_tax_category_from_address(frm), 800);
@@ -57,14 +67,14 @@ async function auto_set_tax_category_from_address(frm) {
 
             row.__pba_handled_key = null;
 
-            // Trigger if quantity is already entered
-            if (flt(row.qty) > 0) {
-                clearTimeout(row.__pba_qty_timer);
-                row.__pba_qty_timer = setTimeout(() => {
-                    if (row.__pba_applying || window.__pba_active_dialog) return;
-                    trigger_purchase_batch_assistant(frm, cdt, cdn, false);
-                }, 300);
-            }
+            clearTimeout(row.__pba_qty_timer);
+            row.__pba_qty_timer = setTimeout(() => {
+                if (row.__pba_applying || window.__pba_active_dialog) return;
+                if (flt(row.qty) <= 0) {
+                    frappe.model.set_value(cdt, cdn, 'qty', 1);
+                }
+                trigger_purchase_batch_assistant(frm, cdt, cdn, false);
+            }, 300);
         },
 
         qty: function(frm, cdt, cdn) {
@@ -117,10 +127,8 @@ function trigger_purchase_batch_assistant(frm, cdt, cdn, is_manual) {
 
     let qty = flt(row.qty);
     if (qty <= 0) {
-        if (is_manual) {
-            frappe.msgprint(__('Please specify a valid Quantity greater than 0 first.'));
-        }
-        return;
+        qty = 1;
+        frappe.model.set_value(cdt, cdn, 'qty', 1);
     }
 
     // Avoid infinite loop if dialog already active

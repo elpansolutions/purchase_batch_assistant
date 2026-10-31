@@ -68,14 +68,25 @@ def get_field_mappings(parent_doctype="Purchase Invoice"):
 
 def parse_mm_yy_to_date(mm_yy_str):
     """
-    Converts MM-YY string (e.g. '04-28' or '08-27') to YYYY-MM-DD matching the last day of the month.
+    Converts MM-YY or MM-YYYY string (e.g. '04-28', '08-27', '06-2030', '06/2030')
+    to YYYY-MM-DD matching the last day of the month.
     """
     if not mm_yy_str:
         return None
-    
-    parts = mm_yy_str.strip().split("-")
+    val_str = str(mm_yy_str).strip()
+    delimiter = '-' if '-' in val_str else ('/' if '/' in val_str else None)
+    if not delimiter:
+        try:
+            return str(getdate(val_str))
+        except Exception:
+            return None
+
+    parts = val_str.split(delimiter)
     if len(parts) != 2:
-        return None
+        try:
+            return str(getdate(val_str))
+        except Exception:
+            return None
 
     month_text, year_text = parts[0], parts[1]
     if not (month_text.isdigit() and year_text.isdigit()):
